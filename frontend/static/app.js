@@ -94,29 +94,144 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString("ru-RU");
 }
 
-function getSelectedValues(id) {
-  return [...document.getElementById(id).selectedOptions].map((option) => option.value);
+function getMultiSelectedValues(id) {
+  return [...document.querySelectorAll(`#${id} input[type="checkbox"]:checked`)].map(
+    (input) => input.value,
+  );
 }
 
-function setSelectOptions(id, values, selectedValues = []) {
-  const select = document.getElementById(id);
-  const selected = new Set(selectedValues);
-  select.innerHTML = "";
-  for (const value of values) {
-    const option = document.createElement("option");
-    option.value = value;
-    option.textContent = value;
-    option.selected = selected.has(value);
-    select.appendChild(option);
+function closeOtherMultiSelects(activeId) {
+  for (const select of document.querySelectorAll(".multi-select.is-open")) {
+    if (select.id !== activeId) {
+      select.classList.remove("is-open");
+      select.querySelector(".multi-select-trigger")?.setAttribute("aria-expanded", "false");
+    }
   }
+}
+
+function renderMultiSelectSummary(container, selectedValues) {
+  const summary = container.querySelector(".multi-select-summary");
+  const placeholder = container.dataset.placeholder || "Выберите";
+  if (!selectedValues.length) {
+    summary.textContent = placeholder;
+    summary.classList.add("is-placeholder");
+    return;
+  }
+  summary.textContent = selectedValues.length <= 2
+    ? selectedValues.join(", ")
+    : `${selectedValues.slice(0, 2).join(", ")} +${selectedValues.length - 2}`;
+  summary.classList.remove("is-placeholder");
+}
+
+function setMultiSelectOptions(id, values, selectedValues = []) {
+  const container = document.getElementById(id);
+  const selected = new Set(selectedValues);
+  const label = document.getElementById(`${id}Label`)?.textContent || "Фильтр";
+  container.innerHTML = "";
+  container.setAttribute("role", "group");
+  container.setAttribute("aria-labelledby", `${id}Label`);
+
+  const trigger = document.createElement("div");
+  trigger.className = "multi-select-trigger";
+  trigger.setAttribute("role", "button");
+  trigger.setAttribute("tabindex", "0");
+  trigger.setAttribute("aria-haspopup", "listbox");
+  trigger.setAttribute("aria-expanded", "false");
+
+  const summary = document.createElement("span");
+  summary.className = "multi-select-summary";
+  trigger.appendChild(summary);
+
+  const clear = document.createElement("span");
+  clear.className = "multi-select-clear";
+  clear.setAttribute("role", "button");
+  clear.setAttribute("tabindex", "0");
+  clear.setAttribute("aria-label", `Сбросить ${label.toLowerCase()}`);
+  clear.textContent = "x";
+  trigger.appendChild(clear);
+
+  const arrow = document.createElement("span");
+  arrow.className = "multi-select-arrow";
+  arrow.setAttribute("aria-hidden", "true");
+  trigger.appendChild(arrow);
+
+  const menu = document.createElement("div");
+  menu.className = "multi-select-menu";
+  menu.setAttribute("role", "listbox");
+  menu.setAttribute("aria-multiselectable", "true");
+
+  for (const value of values) {
+    const option = document.createElement("label");
+    option.className = "multi-select-option";
+    option.setAttribute("role", "option");
+
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = value;
+    checkbox.checked = selected.has(value);
+
+    const text = document.createElement("span");
+    text.textContent = value;
+
+    option.appendChild(checkbox);
+    option.appendChild(text);
+    menu.appendChild(option);
+  }
+
+  container.appendChild(trigger);
+  container.appendChild(menu);
+
+  const sync = () => {
+    const valuesNow = getMultiSelectedValues(id);
+    renderMultiSelectSummary(container, valuesNow);
+    clear.hidden = valuesNow.length === 0;
+  };
+
+  trigger.addEventListener("click", () => {
+    const isOpen = container.classList.toggle("is-open");
+    closeOtherMultiSelects(id);
+    trigger.setAttribute("aria-expanded", String(isOpen));
+  });
+  trigger.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      trigger.click();
+    }
+    if (event.key === "Escape") {
+      container.classList.remove("is-open");
+      trigger.setAttribute("aria-expanded", "false");
+    }
+  });
+
+  clear.addEventListener("click", (event) => {
+    event.stopPropagation();
+    for (const checkbox of container.querySelectorAll('input[type="checkbox"]')) {
+      checkbox.checked = false;
+    }
+    sync();
+    container.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  clear.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      clear.click();
+    }
+  });
+
+  menu.addEventListener("change", () => {
+    sync();
+    container.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+
+  sync();
 }
 
 function getFilters() {
   return {
     dateFrom: document.getElementById("dateFrom").value,
     dateTo: document.getElementById("dateTo").value,
-    accounts: getSelectedValues("accountFilter"),
-    excludedCategories: getSelectedValues("excludedCategoryFilter"),
+    accounts: getMultiSelectedValues("accountFilter"),
+    excludedCategories: getMultiSelectedValues("excludedCategoryFilter"),
     currency: document.getElementById("currencyFilter").value,
     minCategoryTotal: Math.max(0, Number(document.getElementById("minCategoryTotal").value || 0)),
   };
@@ -318,7 +433,8 @@ function renderChart(filteredExpenses) {
       legend: {
         title: { text: "Субкатегории" },
         orientation: "v",
-        x: 1.02,
+        x: 1,
+        xanchor: "right",
         y: 1,
       },
       paper_bgcolor: "#ffffff",
@@ -408,8 +524,12 @@ function renderFilterOptions() {
     ...new Set(expenses.map((expense) => normalizeText(expense.currency)).filter(Boolean)),
   ].sort();
 
-  setSelectOptions("accountFilter", accounts, getSelectedValues("accountFilter"));
-  setSelectOptions("excludedCategoryFilter", categories, getSelectedValues("excludedCategoryFilter"));
+  setMultiSelectOptions("accountFilter", accounts, getMultiSelectedValues("accountFilter"));
+  setMultiSelectOptions(
+    "excludedCategoryFilter",
+    categories,
+    getMultiSelectedValues("excludedCategoryFilter"),
+  );
 
   const currencySelect = document.getElementById("currencyFilter");
   const previousCurrency = currencySelect.value;
@@ -480,8 +600,9 @@ async function syncFromSheets() {
 function resetFilters() {
   document.getElementById("dateFrom").value = "";
   document.getElementById("dateTo").value = "";
-  document.getElementById("accountFilter").selectedIndex = -1;
-  document.getElementById("excludedCategoryFilter").selectedIndex = -1;
+  for (const checkbox of document.querySelectorAll(".multi-select input[type='checkbox']")) {
+    checkbox.checked = false;
+  }
   document.getElementById("minCategoryTotal").value = "";
   dashboardState.selectedCategory = null;
   renderFilterOptions();
@@ -504,6 +625,9 @@ for (const id of [
 
 document.getElementById("syncButton").addEventListener("click", syncFromSheets);
 document.getElementById("resetFilters").addEventListener("click", resetFilters);
+document.addEventListener("click", (event) => {
+  if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
+});
 
 loadDashboard().catch((error) => {
   const box = document.getElementById("syncError");

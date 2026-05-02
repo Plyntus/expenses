@@ -112,6 +112,8 @@ def _parse_date(value: Any) -> date:
     if not text:
         raise ValueError("Date is empty")
     try:
+        if "." in text:
+            return parser.parse(text, dayfirst=True).date()
         return parser.parse(text, dayfirst=False).date()
     except (ValueError, OverflowError) as exc:
         raise ValueError(f"Invalid Date: {text}") from exc
