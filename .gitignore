@@ -1,0 +1,8 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+service_account.json
+postgres_data/
+.DS_Store

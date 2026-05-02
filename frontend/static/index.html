@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Expense Tracker</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
+  </head>
+  <body>
+    <main class="app-shell">
+      <header class="page-header panel">
+        <div>
+          <h1>Расходы</h1>
+          <p id="summaryText">Loading dashboard...</p>
+        </div>
+        <div class="sync-panel">
+          <button id="syncButton" type="button">Sync from Google Sheets</button>
+          <a id="sheetLink" class="sheet-link" href="#" target="_blank" rel="noreferrer">Open Google Sheets</a>
+        </div>
+      </header>
+
+      <section class="truth-note panel">
+        Google Sheets is the source of truth. This dashboard shows the latest synced version from Postgres.
+        To edit expenses, update Google Sheets and run sync.
+      </section>
+
+      <section class="status-grid">
+        <div class="metric panel">
+          <span>Total spending</span>
+          <strong id="totalSpending">-</strong>
+        </div>
+        <div class="metric panel">
+          <span>Last sync</span>
+          <strong id="lastSync">-</strong>
+        </div>
+        <div class="metric panel">
+          <span>Imported rows</span>
+          <strong id="importedRows">-</strong>
+        </div>
+        <div class="metric panel">
+          <span>Sync status</span>
+          <strong id="syncStatus">-</strong>
+        </div>
+      </section>
+
+      <section id="syncError" class="sync-error" hidden></section>
+
+      <section class="chart-grid">
+        <div class="panel chart-panel">
+          <h2>By category</h2>
+          <div id="categoryChart" class="chart"></div>
+        </div>
+        <div class="panel chart-panel">
+          <h2>By month</h2>
+          <div id="monthChart" class="chart"></div>
+        </div>
+      </section>
+
+      <section class="panel table-panel">
+        <h2>Latest expenses</h2>
+        <div class="table-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Date</th>
+                <th>Account</th>
+                <th>Category</th>
+                <th>Subcategory</th>
+                <th>Amount</th>
+                <th>Currency</th>
+                <th>Comment</th>
+              </tr>
+            </thead>
+            <tbody id="latestRows"></tbody>
+          </table>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
