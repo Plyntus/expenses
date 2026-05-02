@@ -19,7 +19,7 @@ def expenses(
     date_from: date | None = None,
     date_to: date | None = None,
     category: str | None = None,
-    limit: int = Query(default=500, ge=1, le=2000),
+    limit: int = Query(default=500, ge=1, le=50000),
     db: Session = Depends(get_db),
 ):
     return get_expenses(

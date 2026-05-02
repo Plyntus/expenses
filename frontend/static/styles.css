@@ -91,6 +91,16 @@ button:disabled {
   cursor: progress;
 }
 
+.secondary-button {
+  border-color: var(--line);
+  background: #f8fafc;
+  color: #334155;
+}
+
+.secondary-button:hover {
+  background: #f1f5f9;
+}
+
 .sheet-link {
   color: var(--accent-dark);
   font-size: 14px;
@@ -105,6 +115,35 @@ button:disabled {
   padding: 14px 16px;
   color: #334155;
   line-height: 1.5;
+}
+
+.filters-panel {
+  padding: 14px;
+  display: flex;
+  gap: 12px;
+  align-items: end;
+  flex-wrap: wrap;
+}
+
+.filter-item {
+  display: grid;
+  gap: 6px;
+}
+
+.filter-item label {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.filter-item input {
+  min-height: 44px;
+  min-width: 170px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 10px;
+  color: var(--text);
+  font: inherit;
 }
 
 .status-grid,

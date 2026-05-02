@@ -3,6 +3,12 @@ const moneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+let dashboardState = {
+  lastSync: null,
+  googleSheetsUrl: null,
+  expenses: [],
+};
+
 async function api(path, options = {}) {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json" },
@@ -25,15 +31,63 @@ function formatDateTime(value) {
   return new Date(value).toLocaleString();
 }
 
-function renderMetrics(summary) {
-  const lastSync = summary.last_sync;
-  const firstCurrency = summary.latest_expenses?.[0]?.currency || "";
+function getDateFilters() {
+  return {
+    dateFrom: document.getElementById("dateFrom").value,
+    dateTo: document.getElementById("dateTo").value,
+  };
+}
+
+function filterExpenses(expenses) {
+  const { dateFrom, dateTo } = getDateFilters();
+  return expenses.filter((expense) => {
+    if (dateFrom && expense.date < dateFrom) return false;
+    if (dateTo && expense.date > dateTo) return false;
+    return true;
+  });
+}
+
+function summarizeExpenses(expenses) {
+  const byCategory = new Map();
+  const byMonth = new Map();
+  let total = 0;
+
+  for (const expense of expenses) {
+    const amount = Math.abs(Number(expense.amount || 0));
+    total += amount;
+
+    const category = expense.category || "Без категории";
+    byCategory.set(category, (byCategory.get(category) || 0) + amount);
+
+    const month = expense.date.slice(0, 7);
+    byMonth.set(month, (byMonth.get(month) || 0) + amount);
+  }
+
+  return {
+    totalSpending: total,
+    spendingByCategory: [...byCategory.entries()]
+      .map(([category, categoryTotal]) => ({ category, total: categoryTotal }))
+      .sort((left, right) => right.total - left.total),
+    spendingByMonth: [...byMonth.entries()]
+      .map(([month, monthTotal]) => ({ month, total: monthTotal }))
+      .sort((left, right) => left.month.localeCompare(right.month)),
+  };
+}
+
+function renderMetrics(expenses) {
+  const lastSync = dashboardState.lastSync;
+  const firstCurrency = expenses?.[0]?.currency || dashboardState.expenses?.[0]?.currency || "";
+  const summary = summarizeExpenses(expenses);
   document.getElementById("totalSpending").textContent = formatMoney(
-    summary.total_spending,
+    summary.totalSpending,
     firstCurrency,
   );
+  const filters = getDateFilters();
+  const period = filters.dateFrom || filters.dateTo
+    ? ` · ${filters.dateFrom || "start"} to ${filters.dateTo || "today"}`
+    : "";
   document.getElementById("summaryText").textContent =
-    `${summary.latest_expenses.length} latest expenses loaded from Postgres`;
+    `${expenses.length} expenses shown from Postgres${period}`;
   document.getElementById("lastSync").textContent = formatDateTime(lastSync?.finished_at);
   document.getElementById("importedRows").textContent = lastSync?.rows_imported ?? "-";
   document.getElementById("syncStatus").textContent = lastSync?.status ?? "never synced";
@@ -48,16 +102,17 @@ function renderMetrics(summary) {
   }
 
   const sheetLink = document.getElementById("sheetLink");
-  if (summary.google_sheets_url) {
-    sheetLink.href = summary.google_sheets_url;
+  if (dashboardState.googleSheetsUrl) {
+    sheetLink.href = dashboardState.googleSheetsUrl;
     sheetLink.hidden = false;
   } else {
     sheetLink.hidden = true;
   }
 }
 
-function renderCharts(summary) {
-  const categories = summary.spending_by_category || [];
+function renderCharts(expenses) {
+  const summary = summarizeExpenses(expenses);
+  const categories = summary.spendingByCategory;
   Plotly.newPlot(
     "categoryChart",
     [
@@ -80,7 +135,7 @@ function renderCharts(summary) {
     { displayModeBar: false, responsive: true },
   );
 
-  const months = summary.spending_by_month || [];
+  const months = summary.spendingByMonth;
   Plotly.newPlot(
     "monthChart",
     [
@@ -107,7 +162,7 @@ function renderCharts(summary) {
 function renderLatestExpenses(expenses) {
   const tbody = document.getElementById("latestRows");
   tbody.innerHTML = "";
-  for (const expense of expenses || []) {
+  for (const expense of (expenses || []).slice(0, 100)) {
     const tr = document.createElement("tr");
     const values = [
       expense.date,
@@ -129,9 +184,20 @@ function renderLatestExpenses(expenses) {
 
 async function loadDashboard() {
   const summary = await api("/api/dashboard/summary");
-  renderMetrics(summary);
-  renderCharts(summary);
-  renderLatestExpenses(summary.latest_expenses);
+  const expenses = await api("/api/expenses?limit=50000");
+  dashboardState = {
+    lastSync: summary.last_sync,
+    googleSheetsUrl: summary.google_sheets_url,
+    expenses,
+  };
+  renderDashboard();
+}
+
+function renderDashboard() {
+  const expenses = filterExpenses(dashboardState.expenses);
+  renderMetrics(expenses);
+  renderCharts(expenses);
+  renderLatestExpenses(expenses);
 }
 
 async function syncFromSheets() {
@@ -152,6 +218,13 @@ async function syncFromSheets() {
 }
 
 document.getElementById("syncButton").addEventListener("click", syncFromSheets);
+document.getElementById("dateFrom").addEventListener("change", renderDashboard);
+document.getElementById("dateTo").addEventListener("change", renderDashboard);
+document.getElementById("resetDateFilter").addEventListener("click", () => {
+  document.getElementById("dateFrom").value = "";
+  document.getElementById("dateTo").value = "";
+  renderDashboard();
+});
 loadDashboard().catch((error) => {
   const box = document.getElementById("syncError");
   box.hidden = false;
