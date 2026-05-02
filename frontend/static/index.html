@@ -1,90 +1,77 @@
 <!doctype html>
-<html lang="en">
+<html lang="ru">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Expense Tracker</title>
+    <title>Расходы</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
   </head>
   <body>
     <main class="app-shell">
       <header class="page-header panel">
-        <div>
+        <div class="header-main">
           <h1>Расходы</h1>
-          <p id="summaryText">Loading dashboard...</p>
+          <div class="summary-row" aria-live="polite">
+            <p id="overallSummary" class="summary-text">Всего: -</p>
+            <p id="filteredSummary" class="summary-text summary-filtered">С фильтрами: -</p>
+          </div>
         </div>
         <div class="sync-panel">
-          <button id="syncButton" type="button">Sync from Google Sheets</button>
-          <a id="sheetLink" class="sheet-link" href="#" target="_blank" rel="noreferrer">Open Google Sheets</a>
+          <button id="syncButton" type="button">Синхронизировать</button>
+          <a id="sheetLink" class="sheet-link" href="#" target="_blank" rel="noreferrer">Открыть Google Sheets</a>
+          <p id="syncMeta" class="sync-meta">Загрузка данных...</p>
         </div>
       </header>
 
-      <section class="truth-note panel">
-        Google Sheets is the source of truth. This dashboard shows the latest synced version from Postgres.
-        To edit expenses, update Google Sheets and run sync.
-      </section>
-
-      <section class="status-grid">
-        <div class="metric panel">
-          <span>Total spending</span>
-          <strong id="totalSpending">-</strong>
-        </div>
-        <div class="metric panel">
-          <span>Last sync</span>
-          <strong id="lastSync">-</strong>
-        </div>
-        <div class="metric panel">
-          <span>Imported rows</span>
-          <strong id="importedRows">-</strong>
-        </div>
-        <div class="metric panel">
-          <span>Sync status</span>
-          <strong id="syncStatus">-</strong>
-        </div>
-      </section>
-
       <section id="syncError" class="sync-error" hidden></section>
 
-      <section class="panel filters-panel">
+      <section class="panel filters-panel" aria-label="Фильтры расходов">
         <div class="filter-item">
-          <label for="dateFrom">Date from</label>
+          <label for="dateFrom">Период от</label>
           <input id="dateFrom" type="date" />
         </div>
         <div class="filter-item">
-          <label for="dateTo">Date to</label>
+          <label for="dateTo">Период до</label>
           <input id="dateTo" type="date" />
         </div>
-        <button id="resetDateFilter" class="secondary-button" type="button">Reset dates</button>
+        <div class="filter-item">
+          <label for="accountFilter">Счета</label>
+          <select id="accountFilter" multiple></select>
+        </div>
+        <div class="filter-item">
+          <label for="excludedCategoryFilter">Исключенные категории</label>
+          <select id="excludedCategoryFilter" multiple></select>
+        </div>
+        <div class="filter-item">
+          <label for="currencyFilter">Валюта</label>
+          <select id="currencyFilter"></select>
+        </div>
+        <div class="filter-item">
+          <label for="minCategoryTotal">Мин. сумма категории</label>
+          <input id="minCategoryTotal" type="number" min="0" step="0.01" placeholder="Например, 400" />
+        </div>
+        <button id="resetFilters" class="secondary-button" type="button">Сбросить</button>
       </section>
 
-      <section class="chart-grid">
-        <div class="panel chart-panel">
-          <h2>By category</h2>
-          <div id="categoryChart" class="chart"></div>
-        </div>
-        <div class="panel chart-panel">
-          <h2>By month</h2>
-          <div id="monthChart" class="chart"></div>
-        </div>
+      <section class="panel chart-panel">
+        <div id="categoryChart" class="chart" role="img" aria-label="Расходы по категориям и субкатегориям"></div>
       </section>
 
-      <section class="panel table-panel">
-        <h2>Latest expenses</h2>
+      <section id="detailsSection" class="panel table-panel is-hidden">
+        <h2 id="detailsTitle">Транзакции</h2>
         <div class="table-wrap">
           <table>
             <thead>
               <tr>
-                <th>Date</th>
-                <th>Account</th>
-                <th>Category</th>
-                <th>Subcategory</th>
-                <th>Amount</th>
-                <th>Currency</th>
-                <th>Comment</th>
+                <th>Дата</th>
+                <th>Счет</th>
+                <th>Сумма</th>
+                <th>Валюта</th>
+                <th>Комментарий</th>
               </tr>
             </thead>
-            <tbody id="latestRows"></tbody>
+            <tbody id="transactionRows"></tbody>
           </table>
         </div>
       </section>
