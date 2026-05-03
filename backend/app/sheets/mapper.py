@@ -4,7 +4,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -111,12 +111,39 @@ def _parse_date(value: Any) -> date:
     text = _optional_text(value)
     if not text:
         raise ValueError("Date is empty")
-    try:
+    if isinstance(value, (int, float)):
+        return _parse_google_serial_date(float(value))
+
+    serial_text = text.replace(",", ".")
+    if re.fullmatch(r"\d+(?:\.\d+)?", serial_text):
+        serial = float(serial_text)
+        if serial > 10_000:
+            return _parse_google_serial_date(serial)
+
+    parts = [int(part) for part in re.findall(r"\d+", text)]
+    if len(parts) >= 3:
         if "." in text:
-            return parser.parse(text, dayfirst=True).date()
+            day, month, year = parts[:3]
+            return date(year, month, day)
+        if "/" in text:
+            first, second, year = parts[:3]
+            if first > 12:
+                day, month = first, second
+            else:
+                month, day = first, second
+            return date(year, month, day)
+        if "-" in text and len(str(parts[0])) == 4:
+            year, month, day = parts[:3]
+            return date(year, month, day)
+
+    try:
         return parser.parse(text, dayfirst=False).date()
     except (ValueError, OverflowError) as exc:
         raise ValueError(f"Invalid Date: {text}") from exc
+
+
+def _parse_google_serial_date(serial: float) -> date:
+    return (datetime(1899, 12, 30) + timedelta(days=serial)).date()
 
 
 def _parse_amount(value: Any) -> Decimal:

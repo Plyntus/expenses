@@ -19,7 +19,6 @@
 html,
 body {
   max-width: 100%;
-  overflow-x: hidden;
 }
 
 body {
@@ -47,10 +46,11 @@ body {
 
 .page-header {
   padding: 22px 24px;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
   gap: 18px;
   align-items: flex-start;
+  overflow: hidden;
 }
 
 h1,
@@ -99,10 +99,22 @@ h2 {
 }
 
 .sync-panel {
-  min-width: min(100%, 420px);
+  max-width: 100%;
   display: grid;
   justify-items: end;
   gap: 8px;
+  min-width: 0;
+}
+
+.sync-panel button,
+.sync-panel a,
+.sync-panel p {
+  max-width: 100%;
+  overflow-wrap: anywhere;
+}
+
+.sync-panel button {
+  white-space: normal;
 }
 
 button {
@@ -179,16 +191,10 @@ a:focus-visible,
 .filters-panel {
   padding: 22px 20px 18px;
   display: grid;
-  grid-template-columns:
-    minmax(150px, 0.7fr)
-    minmax(150px, 0.7fr)
-    minmax(190px, 1fr)
-    minmax(230px, 1.1fr)
-    minmax(130px, 0.58fr)
-    minmax(210px, 0.9fr)
-    auto;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 190px), 1fr));
   gap: 14px;
   align-items: end;
+  overflow: visible;
 }
 
 .filter-item {
@@ -317,6 +323,7 @@ a:focus-visible,
 .chart-panel {
   padding: 20px 18px 12px;
   overflow: hidden;
+  min-width: 0;
 }
 
 .chart {
@@ -384,13 +391,13 @@ th:nth-child(3) {
 
 @media (max-width: 1200px) {
   .filters-panel {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   }
 }
 
 @media (max-width: 900px) {
   .page-header {
-    display: grid;
+    grid-template-columns: 1fr;
   }
 
   .sync-panel {

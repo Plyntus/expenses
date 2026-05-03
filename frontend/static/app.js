@@ -33,6 +33,7 @@ let dashboardState = {
   selectedCategory: null,
   collapsedCategories: new Set(),
 };
+let resizeTimer = null;
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
@@ -365,6 +366,9 @@ function colorForSubcategory(subcategory, index) {
 function renderChart(filteredExpenses) {
   const filters = getFilters();
   const currency = getPrimaryCurrency(filteredExpenses);
+  const chartElement = document.getElementById("categoryChart");
+  const chartWidth = chartElement.clientWidth || window.innerWidth;
+  const compactChart = chartWidth < 1180;
   const { categories, subcategories, collapsedCategories } = aggregateForChart(
     filteredExpenses,
     filters.minCategoryTotal,
@@ -394,7 +398,8 @@ function renderChart(filteredExpenses) {
       "<extra></extra>",
   }));
 
-  const height = Math.max(440, categoryNames.length * 48 + 110);
+  const legendRows = Math.ceil(subcategories.length / Math.max(1, Math.floor(chartWidth / 160)));
+  const height = Math.max(440, categoryNames.length * 48 + 110 + (compactChart ? legendRows * 28 : 0));
   const emptyAnnotations = categoryNames.length
     ? []
     : [
@@ -414,7 +419,12 @@ function renderChart(filteredExpenses) {
     {
       barmode: "stack",
       height,
-      margin: { l: 190, r: 24, t: 18, b: 42 },
+      margin: {
+        l: compactChart ? 132 : 190,
+        r: compactChart ? 12 : 24,
+        t: 18,
+        b: compactChart ? Math.max(86, legendRows * 28 + 54) : 42,
+      },
       xaxis: {
         title: "Сумма",
         gridcolor: "#dfe8f6",
@@ -432,10 +442,12 @@ function renderChart(filteredExpenses) {
       annotations: emptyAnnotations,
       legend: {
         title: { text: "Субкатегории" },
-        orientation: "v",
-        x: 1,
-        xanchor: "right",
-        y: 1,
+        orientation: compactChart ? "h" : "v",
+        x: compactChart ? 0 : 1,
+        xanchor: compactChart ? "left" : "right",
+        y: compactChart ? -0.18 : 1,
+        yanchor: compactChart ? "top" : "top",
+        tracegroupgap: 4,
       },
       paper_bgcolor: "#ffffff",
       plot_bgcolor: "#ffffff",
@@ -449,11 +461,10 @@ function renderChart(filteredExpenses) {
     { displayModeBar: false, responsive: true },
   );
 
-  const chart = document.getElementById("categoryChart");
-  if (typeof chart.removeAllListeners === "function") {
-    chart.removeAllListeners("plotly_click");
+  if (typeof chartElement.removeAllListeners === "function") {
+    chartElement.removeAllListeners("plotly_click");
   }
-  chart.on("plotly_click", (event) => {
+  chartElement.on("plotly_click", (event) => {
     const point = event?.points?.[0];
     dashboardState.selectedCategory = point?.y || null;
     renderDetails(filteredExpenses);
@@ -627,6 +638,10 @@ document.getElementById("syncButton").addEventListener("click", syncFromSheets);
 document.getElementById("resetFilters").addEventListener("click", resetFilters);
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
+});
+window.addEventListener("resize", () => {
+  window.clearTimeout(resizeTimer);
+  resizeTimer = window.setTimeout(renderDashboard, 120);
 });
 
 loadDashboard().catch((error) => {
