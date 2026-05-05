@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterable
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -10,6 +11,10 @@ import pandas as pd
 from openai import OpenAI
 
 from app.llm.prompts import get_system_prompt
+
+
+def _format_date(dt: datetime) -> str:
+    return f"{dt.month}/{dt.day}/{dt.year}"
 
 
 class ExpenseParser:
@@ -41,7 +46,11 @@ class ExpenseParser:
         return transcription.text
 
     def _get_system_prompt(self) -> str:
-        if self._custom_prompt_path and self._custom_prompt_path.exists():
+        if (
+            self._custom_prompt_path
+            and self._custom_prompt_path.exists()
+            and self._custom_prompt_path.suffix != ".py"
+        ):
             return self._custom_prompt_path.read_text(encoding="utf-8")
         return get_system_prompt()
 
@@ -60,7 +69,9 @@ class ExpenseParser:
         return content
 
 
-def parse_rows(raw_json: str) -> list[dict[str, Any]]:
+def parse_rows(
+    raw_json: str, current_date: datetime | None = None
+) -> list[dict[str, Any]]:
     data = json.loads(raw_json)
     if isinstance(data, list):
         rows = data
@@ -75,10 +86,34 @@ def parse_rows(raw_json: str) -> list[dict[str, Any]]:
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Every row must be a JSON object")
+        _normalize_date_placeholders(row, current_date)
         normalized_rows.append(row)
     if not normalized_rows:
         raise ValueError("LLM response contains no rows")
     return normalized_rows
+
+
+def _normalize_date_placeholders(
+    row: dict[str, Any], current_date: datetime | None = None
+) -> None:
+    date_value = row.get("Date")
+    if not isinstance(date_value, str):
+        return
+
+    if current_date is None:
+        current_date = datetime.now()
+
+    placeholders = {
+        "[TODAY]": current_date,
+        "TODAY": current_date,
+        "CURRENT DATE": current_date,
+        "[CURRENT_DATE]": current_date,
+        "[YESTERDAY]": current_date - timedelta(days=1),
+        "YESTERDAY": current_date - timedelta(days=1),
+    }
+    normalized = date_value.strip().upper()
+    if normalized in placeholders:
+        row["Date"] = _format_date(placeholders[normalized])
 
 
 def rows_to_dataframe(rows: Iterable[dict[str, Any]]) -> pd.DataFrame:

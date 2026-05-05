@@ -1,3 +1,8 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+
+
 SYSTEM_PROMPT_TEMPLATE = """You are an expense parsing assistant. Your task is to extract structured expense data from a short free-form user message.
 
 Current date: {current_date}
@@ -25,6 +30,7 @@ Field rules:
   - "yesterday", "вчера" → current date minus 1 day
   - "позавчера" → current date minus 2 days
 - If the date is not clearly and unambiguously stated, use the current date.
+- Always output the actual resolved date string, never placeholder labels or relative-date words.
 - Do not include the date in Comment.
 
 2. Sum
@@ -58,14 +64,14 @@ Field rules:
 - If the user repeats the same word, keep it once.
 - Comment should be short, but not lose important context.
 
-Examples (dates are illustrative, use the actual current date provided above):
+Examples:
 
 Input:
 "Сходил в магазин продуктов, набрали на 25 евро сегодня"
 
 Output:
 {{
-  "Date": "[TODAY]",
+  "Date": "{today_date}",
   "Sum": -25,
   "Comment": "магазин продуктов"
 }}
@@ -75,7 +81,7 @@ Input:
 
 Output:
 {{
-  "Date": "[TODAY]",
+  "Date": "{today_date}",
   "Sum": -40,
   "Comment": "продукты в Бейме"
 }}
@@ -85,7 +91,7 @@ Input:
 
 Output:
 {{
-  "Date": "[YESTERDAY]",
+  "Date": "{yesterday_date}",
   "Sum": -30,
   "Comment": "покупка ботинок"
 }}
@@ -95,7 +101,7 @@ Input:
 
 Output:
 {{
-  "Date": "[TODAY]",
+  "Date": "{today_date}",
   "Sum": -18.9,
   "Comment": "аптека, лекарства"
 }}
@@ -105,7 +111,7 @@ Input:
 
 Output:
 {{
-  "Date": "[YESTERDAY]",
+  "Date": "{yesterday_date}",
   "Sum": -12,
   "Comment": "кофе и булочка"
 }}
@@ -113,21 +119,35 @@ Output:
 If the message does not contain a recognizable expense amount, return:
 
 {{
-  "Date": "[TODAY]",
+  "Date": "{today_date}",
   "Sum": null,
   "Comment": "short source text summary"
 }}
 """
 
 
-def get_system_prompt(current_date: str) -> str:
+def _format_date(dt: datetime) -> str:
+    return f"{dt.month}/{dt.day}/{dt.year}"
+
+
+def get_system_prompt(current_date: datetime | None = None) -> str:
     """
     Generate the system prompt with the current date.
-    
+
     Args:
-        current_date: Date string in M/D/YYYY format (e.g., "5/5/2026")
-    
+        current_date: datetime object. If None, uses datetime.now().
+
     Returns:
-        Formatted system prompt with the date substituted.
+        Formatted system prompt with dates substituted.
     """
-    return SYSTEM_PROMPT_TEMPLATE.format(current_date=current_date)
+    if current_date is None:
+        current_date = datetime.now()
+
+    today = _format_date(current_date)
+    yesterday = _format_date(current_date - timedelta(days=1))
+
+    return SYSTEM_PROMPT_TEMPLATE.format(
+        current_date=today,
+        today_date=today,
+        yesterday_date=yesterday,
+    )
