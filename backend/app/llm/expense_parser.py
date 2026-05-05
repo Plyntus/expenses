@@ -3,7 +3,6 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterable
-from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -44,8 +43,7 @@ class ExpenseParser:
     def _get_system_prompt(self) -> str:
         if self._custom_prompt_path and self._custom_prompt_path.exists():
             return self._custom_prompt_path.read_text(encoding="utf-8")
-        current_date = datetime.now().strftime("%-m/%-d/%Y")
-        return get_system_prompt(current_date)
+        return get_system_prompt()
 
     def _structure_text_sync(self, user_text: str) -> str:
         response = self._client.chat.completions.create(
