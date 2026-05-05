@@ -3,13 +3,14 @@ from __future__ import annotations
 import asyncio
 import json
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
 from openai import OpenAI
 
-from app.llm.prompts import SYSTEM_PROMPT
+from app.llm.prompts import get_system_prompt
 
 
 class ExpenseParser:
@@ -24,11 +25,7 @@ class ExpenseParser:
         self._client = OpenAI(api_key=api_key)
         self._transcribe_model = transcribe_model
         self._text_model = text_model
-        self._system_prompt = (
-            system_prompt_path.read_text(encoding="utf-8")
-            if system_prompt_path and system_prompt_path.exists()
-            else SYSTEM_PROMPT
-        )
+        self._custom_prompt_path = system_prompt_path
 
     async def transcribe(self, audio_path: Path) -> str:
         return await asyncio.to_thread(self._transcribe_sync, audio_path)
@@ -44,12 +41,18 @@ class ExpenseParser:
             )
         return transcription.text
 
+    def _get_system_prompt(self) -> str:
+        if self._custom_prompt_path and self._custom_prompt_path.exists():
+            return self._custom_prompt_path.read_text(encoding="utf-8")
+        current_date = datetime.now().strftime("%-m/%-d/%Y")
+        return get_system_prompt(current_date)
+
     def _structure_text_sync(self, user_text: str) -> str:
         response = self._client.chat.completions.create(
             model=self._text_model,
             response_format={"type": "json_object"},
             messages=[
-                {"role": "system", "content": self._system_prompt},
+                {"role": "system", "content": self._get_system_prompt()},
                 {"role": "user", "content": user_text},
             ],
         )

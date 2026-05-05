@@ -6,3 +6,4 @@ __pycache__/
 service_account.json
 postgres_data/
 .DS_Store
+my_readme.md
