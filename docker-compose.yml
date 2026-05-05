@@ -43,8 +43,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    profiles:
-      - bot
+      backend:
+        condition: service_started
 
 volumes:
   postgres_data:
