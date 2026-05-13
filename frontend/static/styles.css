@@ -32,7 +32,7 @@ body {
 .app-shell {
   width: min(calc(100vw - 16px), 1480px);
   margin: 0 auto;
-  padding: 8px 8px 28px;
+  padding: 8px 8px 24px;
   display: grid;
   gap: 4px;
 }
@@ -45,11 +45,11 @@ body {
 }
 
 .page-header {
-  padding: 22px 24px;
+  padding: 16px 18px;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(220px, max-content);
-  gap: 18px;
-  align-items: flex-start;
+  gap: 14px;
+  align-items: center;
   overflow: hidden;
 }
 
@@ -61,7 +61,7 @@ p {
 
 h1 {
   color: #0f172a;
-  font-size: clamp(30px, 3.2vw, 44px);
+  font-size: clamp(26px, 2.5vw, 34px);
   line-height: 1.05;
   letter-spacing: 0;
 }
@@ -76,7 +76,7 @@ h2 {
 
 .header-main {
   display: grid;
-  gap: 10px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -89,20 +89,16 @@ h2 {
 
 .summary-text {
   color: var(--muted);
-  font-size: clamp(18px, 2vw, 26px);
+  font-size: clamp(16px, 1.45vw, 20px);
   font-weight: 500;
   font-variant-numeric: tabular-nums;
-}
-
-.summary-filtered {
-  color: #334155;
 }
 
 .sync-panel {
   max-width: 100%;
   display: grid;
   justify-items: end;
-  gap: 8px;
+  gap: 6px;
   min-width: 0;
 }
 
@@ -162,20 +158,10 @@ a:focus-visible,
   background: #eef2f7;
 }
 
-.sheet-link {
-  color: var(--accent-dark);
-  font-size: 14px;
-  font-weight: 800;
-}
-
-.sheet-link[hidden] {
-  display: none;
-}
-
 .sync-meta {
   max-width: 520px;
   color: var(--muted);
-  font-size: 14px;
+  font-size: 13px;
   text-align: right;
 }
 
@@ -321,7 +307,7 @@ a:focus-visible,
 }
 
 .chart-panel {
-  padding: 20px 18px 12px;
+  padding: 16px 14px 10px;
   overflow: hidden;
   min-width: 0;
 }
@@ -398,6 +384,7 @@ th:nth-child(3) {
 @media (max-width: 900px) {
   .page-header {
     grid-template-columns: 1fr;
+    align-items: start;
   }
 
   .sync-panel {
@@ -412,13 +399,14 @@ th:nth-child(3) {
 
 @media (max-width: 700px) {
   .app-shell {
-    padding: 6px 6px 20px;
+    width: min(calc(100vw - 10px), 1480px);
+    padding: 5px 5px 18px;
   }
 
   .page-header,
   .filters-panel,
   .chart-panel {
-    padding: 16px 14px;
+    padding: 14px 12px;
   }
 
   .summary-row {
@@ -430,8 +418,17 @@ th:nth-child(3) {
     font-size: 16px;
   }
 
+  .sync-panel button {
+    width: 100%;
+  }
+
+  .chart {
+    min-height: 380px;
+  }
+
   .filters-panel {
     grid-template-columns: 1fr;
+    gap: 12px;
   }
 
   th,

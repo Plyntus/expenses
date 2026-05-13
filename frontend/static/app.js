@@ -7,6 +7,10 @@ const moneyFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 2,
 });
 
+const wholeNumberFormatter = new Intl.NumberFormat("en-US", {
+  maximumFractionDigits: 0,
+});
+
 const categoryColors = [
   "#0072B2",
   "#E69F00",
@@ -82,6 +86,13 @@ function formatSignedNumber(value) {
   const numeric = Number(value || 0);
   const sign = numeric < 0 ? "-" : "";
   return `${sign}${moneyFormatter.format(Math.abs(numeric)).replace(/,/g, " ")}`;
+}
+
+function formatWholeMoney(value, currency) {
+  const amount = wholeNumberFormatter.format(Math.round(Math.abs(Number(value || 0))));
+  const symbol = currencySymbol(currency);
+  if (symbol) return `${symbol}${amount}`;
+  return currency ? `${amount} ${currency}` : amount;
 }
 
 function formatDate(value) {
@@ -318,18 +329,15 @@ function getPrimaryCurrency(expenses) {
   );
 }
 
-function renderSummary(filteredExpenses) {
+function renderSummary() {
   const currency = getPrimaryCurrency(dashboardState.expenses);
   const allForCurrency = dashboardState.expenses.filter(
     (expense) => !currency || normalizeText(expense.currency) === currency,
   );
   const overall = summarizeExpenses(allForCurrency);
-  const filtered = summarizeExpenses(filteredExpenses);
 
   document.getElementById("overallSummary").textContent =
     `Всего: ${formatMoney(overall.total, currency)} · ${overall.count} транзакций`;
-  document.getElementById("filteredSummary").textContent =
-    `С фильтрами: ${formatMoney(filtered.total, currency)} · ${filtered.count} транзакций`;
 
   const lastSync = dashboardState.lastSync;
   const importedRows = lastSync?.rows_imported ?? "-";
@@ -346,13 +354,6 @@ function renderSummary(filteredExpenses) {
     error.textContent = "";
   }
 
-  const sheetLink = document.getElementById("sheetLink");
-  if (dashboardState.googleSheetsUrl) {
-    sheetLink.href = dashboardState.googleSheetsUrl;
-    sheetLink.hidden = false;
-  } else {
-    sheetLink.hidden = true;
-  }
 }
 
 function colorForSubcategory(subcategory, index) {
@@ -382,6 +383,8 @@ function renderChart(filteredExpenses) {
 
   const categoryNames = categories.map((item) => item.category);
   const totalsByCategory = new Map(categories.map((item) => [item.category, item.total]));
+  const maxTotal = Math.max(0, ...categories.map((item) => item.total));
+  const labelReserve = chartWidth < 520 ? 1.35 : chartWidth < 900 ? 1.24 : 1.16;
   const traces = subcategories.map((subcategory, index) => ({
     type: "bar",
     orientation: "h",
@@ -398,10 +401,25 @@ function renderChart(filteredExpenses) {
       "<extra></extra>",
   }));
 
-  const legendRows = Math.ceil(subcategories.length / Math.max(1, Math.floor(chartWidth / 160)));
-  const height = Math.max(440, categoryNames.length * 48 + 110 + (compactChart ? legendRows * 28 : 0));
+  const valueAnnotations = categories.map((item) => ({
+    text: formatWholeMoney(item.total, currency),
+    x: item.total,
+    y: item.category,
+    xref: "x",
+    yref: "y",
+    xanchor: "left",
+    yanchor: "middle",
+    xshift: chartWidth < 520 ? 4 : 8,
+    showarrow: false,
+    font: {
+      size: chartWidth < 520 ? 11 : 13,
+      color: "#334155",
+      family: "Avenir Next, Segoe UI, Arial, sans-serif",
+    },
+  }));
+  const height = Math.max(chartWidth < 520 ? 380 : 420, categoryNames.length * 40 + 96);
   const emptyAnnotations = categoryNames.length
-    ? []
+    ? valueAnnotations
     : [
         {
           text: "Нет транзакций для выбранных фильтров",
@@ -419,11 +437,13 @@ function renderChart(filteredExpenses) {
     {
       barmode: "stack",
       height,
+      showlegend: false,
+      bargap: 0.34,
       margin: {
-        l: compactChart ? 132 : 190,
-        r: compactChart ? 12 : 24,
+        l: compactChart ? 122 : 180,
+        r: chartWidth < 520 ? 56 : 86,
         t: 18,
-        b: compactChart ? Math.max(86, legendRows * 28 + 54) : 42,
+        b: compactChart ? 58 : 42,
       },
       xaxis: {
         title: "Сумма",
@@ -432,23 +452,17 @@ function renderChart(filteredExpenses) {
         zerolinecolor: "#d9e2f1",
         tickprefix: currencySymbol(currency),
         separatethousands: true,
+        range: maxTotal > 0 ? [0, maxTotal * labelReserve] : undefined,
       },
       yaxis: {
         autorange: "reversed",
         categoryorder: "array",
         categoryarray: categoryNames,
         visible: Boolean(categoryNames.length),
+        automargin: true,
+        tickfont: { size: chartWidth < 520 ? 12 : 14 },
       },
       annotations: emptyAnnotations,
-      legend: {
-        title: { text: "Субкатегории" },
-        orientation: compactChart ? "h" : "v",
-        x: compactChart ? 0 : 1,
-        xanchor: compactChart ? "left" : "right",
-        y: compactChart ? -0.18 : 1,
-        yanchor: compactChart ? "top" : "top",
-        tracegroupgap: 4,
-      },
       paper_bgcolor: "#ffffff",
       plot_bgcolor: "#ffffff",
       hoverlabel: {
@@ -572,7 +586,7 @@ function renderFilterOptions() {
 
 function renderDashboard() {
   const filteredExpenses = filterExpenses(dashboardState.expenses);
-  renderSummary(filteredExpenses);
+  renderSummary();
   renderChart(filteredExpenses);
   renderDetails(filteredExpenses);
 }
