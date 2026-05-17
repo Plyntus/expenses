@@ -454,10 +454,6 @@ function renderSummary() {
     "is-hidden",
     dashboardState.activeView !== "expenses",
   );
-  document.getElementById("balanceSummary").classList.toggle(
-    "is-hidden",
-    dashboardState.activeView !== "balance",
-  );
 
   const currency = getPrimaryCurrency(dashboardState.expenses);
   const allForCurrency = dashboardState.expenses.filter(
@@ -675,9 +671,11 @@ function formatBalanceValue(balance) {
 function renderRateMeta() {
   const meta = document.getElementById("rateMeta");
   if (!dashboardState.convertToEur) {
-    meta.textContent = "Балансы показаны в валюте счета";
+    meta.hidden = true;
+    meta.textContent = "";
     return;
   }
+  meta.hidden = false;
   if (dashboardState.exchangeRateError) {
     meta.textContent = dashboardState.exchangeRateError;
     return;
@@ -692,68 +690,6 @@ function renderRateMeta() {
   meta.textContent = `Конвертация через open.er-api.com${updated}`;
 }
 
-function summarizeBalances(balances) {
-  if (dashboardState.convertToEur) {
-    let total = 0;
-    let missingRates = 0;
-    for (const balance of balances) {
-      const converted = convertAmountToEur(balance.balance, balance.currency);
-      if (converted == null) {
-        missingRates += 1;
-      } else {
-        total += converted;
-      }
-    }
-    return {
-      primary: formatMoney(total, "EUR", { signed: true }),
-      details: missingRates ? `${missingRates} счетов без курса` : "Все счета пересчитаны",
-    };
-  }
-
-  const totalsByCurrency = new Map();
-  for (const balance of balances) {
-    const currency = normalizeText(balance.currency, "-");
-    totalsByCurrency.set(currency, (totalsByCurrency.get(currency) || 0) + balance.balance);
-  }
-  const parts = [...totalsByCurrency.entries()]
-    .sort(([left], [right]) => left.localeCompare(right, "ru"))
-    .map(([currency, value]) => formatMoney(value, currency, { signed: true }));
-  return {
-    primary: parts.join(" · ") || "-",
-    details: `${balances.length} счетов`,
-  };
-}
-
-function renderBalanceOverview(container, balances, filteredMovements) {
-  const overview = document.createElement("div");
-  overview.className = "balance-overview";
-  const summary = summarizeBalances(balances);
-  const metrics = [
-    ["Итог", summary.primary],
-    ["Счета", String(balances.length)],
-    ["Движения", String(filteredMovements.length)],
-    ["Статус курсов", summary.details],
-  ];
-
-  for (const [label, value] of metrics) {
-    const metric = document.createElement("div");
-    metric.className = "metric";
-    const labelEl = document.createElement("div");
-    labelEl.className = "metric-label";
-    labelEl.textContent = label;
-    const valueEl = document.createElement("div");
-    valueEl.className = "metric-value";
-    valueEl.textContent = value;
-    metric.appendChild(labelEl);
-    metric.appendChild(valueEl);
-    overview.appendChild(metric);
-  }
-  container.appendChild(overview);
-
-  document.getElementById("balanceSummary").textContent =
-    `Баланс: ${summary.primary} · ${summary.details}`;
-}
-
 function balancesGroupedBy(balances, field) {
   const grouped = new Map();
   for (const balance of balances) {
@@ -764,60 +700,59 @@ function balancesGroupedBy(balances, field) {
   return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "ru"));
 }
 
-function renderBalanceTable(rows) {
-  const wrap = document.createElement("div");
-  wrap.className = "table-wrap";
-  const table = document.createElement("table");
-  table.className = "balance-table";
-  table.innerHTML = `
-    <thead>
-      <tr>
-        <th>Счет</th>
-        <th>Валюта</th>
-        <th>Тип</th>
-        <th>Статус</th>
-        <th>Баланс</th>
-      </tr>
-    </thead>
-    <tbody></tbody>
-  `;
-  const tbody = table.querySelector("tbody");
+function renderBalanceRows(rows) {
+  const list = document.createElement("div");
+  list.className = "balance-list";
   for (const balance of rows) {
-    const tr = document.createElement("tr");
-    const values = [
-      balance.account,
-      normalizeText(balance.currency, "-"),
-      balance.accountType,
-      balance.accountStatus,
-      formatBalanceValue(balance),
-    ];
-    for (const [index, value] of values.entries()) {
-      const td = document.createElement("td");
-      td.textContent = value;
-      if (index === values.length - 1) {
-        td.className = `balance-amount${balance.balance < 0 ? " is-negative" : ""}`;
-      }
-      tr.appendChild(td);
-    }
-    tbody.appendChild(tr);
+    const row = document.createElement("div");
+    row.className = "balance-row";
+
+    const account = document.createElement("div");
+    account.className = "balance-account";
+    account.textContent = balance.account;
+
+    const currency = document.createElement("div");
+    currency.className = "balance-currency";
+    currency.textContent = normalizeText(balance.currency, "-");
+
+    const amount = document.createElement("div");
+    amount.className = `balance-amount${balance.balance < 0 ? " is-negative" : ""}`;
+    amount.textContent = formatBalanceValue(balance);
+
+    row.appendChild(account);
+    row.appendChild(currency);
+    row.appendChild(amount);
+    list.appendChild(row);
   }
-  wrap.appendChild(table);
-  return wrap;
+  return list;
 }
 
-function renderBalanceDimension(container, title, field, balances) {
+function renderBalanceGroups(container, balances) {
   const section = document.createElement("section");
   section.className = "balance-section";
-  const heading = document.createElement("h3");
-  heading.textContent = title;
-  section.appendChild(heading);
 
-  for (const [group, rows] of balancesGroupedBy(balances, field)) {
-    const groupTitle = document.createElement("div");
-    groupTitle.className = "balance-group-title";
-    groupTitle.textContent = `${group} · ${rows.length} счетов`;
-    section.appendChild(groupTitle);
-    section.appendChild(renderBalanceTable(rows));
+  for (const [status, statusRows] of balancesGroupedBy(balances, "accountStatus")) {
+    const statusDetails = document.createElement("details");
+    statusDetails.className = "balance-accordion balance-accordion-status";
+    statusDetails.open = true;
+
+    const statusSummary = document.createElement("summary");
+    statusSummary.textContent = status;
+    statusDetails.appendChild(statusSummary);
+
+    for (const [type, typeRows] of balancesGroupedBy(statusRows, "accountType")) {
+      const typeDetails = document.createElement("details");
+      typeDetails.className = "balance-accordion balance-accordion-type";
+      typeDetails.open = true;
+
+      const typeSummary = document.createElement("summary");
+      typeSummary.textContent = type;
+      typeDetails.appendChild(typeSummary);
+      typeDetails.appendChild(renderBalanceRows(typeRows));
+      statusDetails.appendChild(typeDetails);
+    }
+
+    section.appendChild(statusDetails);
   }
 
   container.appendChild(section);
@@ -830,7 +765,6 @@ function renderBalance() {
 
   const filteredMovements = filterMovements(dashboardState.movements);
   const balances = buildAccountBalances(filteredMovements);
-  renderBalanceOverview(container, balances, filteredMovements);
 
   if (!balances.length) {
     const empty = document.createElement("div");
@@ -840,9 +774,7 @@ function renderBalance() {
     return;
   }
 
-  renderBalanceDimension(container, "В разрезе валюты", "currency", balances);
-  renderBalanceDimension(container, "В разрезе типа счета", "accountType", balances);
-  renderBalanceDimension(container, "В разрезе статуса счета", "accountStatus", balances);
+  renderBalanceGroups(container, balances);
 }
 
 function renderFilterOptions() {
