@@ -13,10 +13,16 @@ def get_expenses(
     date_from: date | None = None,
     date_to: date | None = None,
     category: str | None = None,
+    expenses_only: bool = True,
     limit: int = 500,
 ):
     return repository.list_expenses(
-        db, date_from=date_from, date_to=date_to, category=category, limit=limit
+        db,
+        date_from=date_from,
+        date_to=date_to,
+        category=category,
+        expenses_only=expenses_only,
+        limit=limit,
     )
 
 

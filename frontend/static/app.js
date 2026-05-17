@@ -1,6 +1,10 @@
 const OTHER_CATEGORY = "Другое";
 const FALLBACK_CATEGORY = "Без категории";
 const FALLBACK_SUBCATEGORY = "Без субкатегории";
+const FALLBACK_ACCOUNT = "Без счета";
+const FALLBACK_ACCOUNT_TYPE = "Без типа";
+const FALLBACK_ACCOUNT_STATUS = "Без статуса";
+const EUR_RATE_API_URL = "https://open.er-api.com/v6/latest/EUR";
 
 const moneyFormatter = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
@@ -31,11 +35,16 @@ const categoryColors = [
 ];
 
 let dashboardState = {
+  activeView: "expenses",
   lastSync: null,
   googleSheetsUrl: null,
   expenses: [],
+  movements: [],
   selectedCategory: null,
   collapsedCategories: new Set(),
+  convertToEur: false,
+  exchangeRates: null,
+  exchangeRateError: null,
 };
 let resizeTimer = null;
 
@@ -54,6 +63,23 @@ async function api(path, options = {}) {
 function normalizeText(value, fallback = "") {
   const text = value == null ? "" : String(value).trim();
   return text || fallback;
+}
+
+function rawField(expense, key, fallback = "") {
+  const raw = expense?.raw_values_json || {};
+  return normalizeText(raw[key], fallback);
+}
+
+function accountName(expense) {
+  return normalizeText(expense.payment_method, FALLBACK_ACCOUNT);
+}
+
+function accountType(expense) {
+  return rawField(expense, "Account type", FALLBACK_ACCOUNT_TYPE);
+}
+
+function accountStatus(expense) {
+  return rawField(expense, "Account status", FALLBACK_ACCOUNT_STATUS);
 }
 
 function expenseAmount(expense) {
@@ -107,6 +133,7 @@ function formatDateTime(value) {
 }
 
 function getMultiSelectedValues(id) {
+  if (!document.getElementById(id)) return [];
   return [...document.querySelectorAll(`#${id} input[type="checkbox"]:checked`)].map(
     (input) => input.value,
   );
@@ -268,6 +295,99 @@ function filterExpenses(expenses) {
   });
 }
 
+function getBalanceFilters() {
+  return {
+    dateFrom: document.getElementById("balanceDateFrom").value,
+    dateTo: document.getElementById("balanceDateTo").value,
+    currencies: getMultiSelectedValues("balanceCurrencyFilter"),
+    accountTypes: getMultiSelectedValues("accountTypeFilter"),
+    accountStatuses: getMultiSelectedValues("accountStatusFilter"),
+  };
+}
+
+function filterMovements(movements) {
+  const filters = getBalanceFilters();
+  const currencySet = new Set(filters.currencies);
+  const typeSet = new Set(filters.accountTypes);
+  const statusSet = new Set(filters.accountStatuses);
+
+  return movements.filter((movement) => {
+    const currency = normalizeText(movement.currency);
+    if (filters.dateFrom && movement.date < filters.dateFrom) return false;
+    if (filters.dateTo && movement.date > filters.dateTo) return false;
+    if (currencySet.size && !currencySet.has(currency)) return false;
+    if (typeSet.size && !typeSet.has(accountType(movement))) return false;
+    if (statusSet.size && !statusSet.has(accountStatus(movement))) return false;
+    return true;
+  });
+}
+
+async function ensureExchangeRates() {
+  if (dashboardState.exchangeRates) return dashboardState.exchangeRates;
+  const response = await fetch(EUR_RATE_API_URL);
+  if (!response.ok) {
+    throw new Error(`Не удалось загрузить курсы валют: ${response.status}`);
+  }
+  const payload = await response.json();
+  if (!payload?.rates || payload.result === "error") {
+    throw new Error("API курсов валют вернул неожиданный ответ");
+  }
+  dashboardState.exchangeRates = {
+    base: "EUR",
+    rates: { EUR: 1, ...payload.rates },
+    updated: payload.time_last_update_utc || payload.time_last_update_unix || null,
+  };
+  dashboardState.exchangeRateError = null;
+  return dashboardState.exchangeRates;
+}
+
+function convertAmountToEur(value, currency) {
+  const code = normalizeText(currency).toUpperCase();
+  if (!code || code === "EUR") return Number(value || 0);
+  const rate = dashboardState.exchangeRates?.rates?.[code];
+  if (!rate) return null;
+  return Number(value || 0) / Number(rate);
+}
+
+function balanceDisplayAmount(value, currency) {
+  if (!dashboardState.convertToEur) return { value, currency, converted: true };
+  const converted = convertAmountToEur(value, currency);
+  return { value: converted, currency: "EUR", converted: converted != null };
+}
+
+function accountBalanceKey(movement) {
+  return [
+    accountName(movement),
+    normalizeText(movement.currency),
+    accountType(movement),
+    accountStatus(movement),
+  ].join("\u0001");
+}
+
+function buildAccountBalances(movements) {
+  const balances = new Map();
+  for (const movement of movements) {
+    const key = accountBalanceKey(movement);
+    if (!balances.has(key)) {
+      balances.set(key, {
+        account: accountName(movement),
+        currency: normalizeText(movement.currency),
+        accountType: accountType(movement),
+        accountStatus: accountStatus(movement),
+        balance: 0,
+        movementCount: 0,
+      });
+    }
+    const item = balances.get(key);
+    item.balance += signedAmount(movement);
+    item.movementCount += 1;
+  }
+  return [...balances.values()].sort((left, right) =>
+    left.account.localeCompare(right.account, "ru") ||
+    left.currency.localeCompare(right.currency, "ru"),
+  );
+}
+
 function summarizeExpenses(expenses) {
   return {
     total: expenses.reduce((sum, expense) => sum + expenseAmount(expense), 0),
@@ -330,6 +450,15 @@ function getPrimaryCurrency(expenses) {
 }
 
 function renderSummary() {
+  document.getElementById("overallSummary").classList.toggle(
+    "is-hidden",
+    dashboardState.activeView !== "expenses",
+  );
+  document.getElementById("balanceSummary").classList.toggle(
+    "is-hidden",
+    dashboardState.activeView !== "balance",
+  );
+
   const currency = getPrimaryCurrency(dashboardState.expenses);
   const allForCurrency = dashboardState.expenses.filter(
     (expense) => !currency || normalizeText(expense.currency) === currency,
@@ -537,6 +666,185 @@ function renderDetails(filteredExpenses) {
   section.classList.remove("is-hidden");
 }
 
+function formatBalanceValue(balance) {
+  const display = balanceDisplayAmount(balance.balance, balance.currency);
+  if (!display.converted) return "Нет курса";
+  return formatMoney(display.value, display.currency, { signed: true });
+}
+
+function renderRateMeta() {
+  const meta = document.getElementById("rateMeta");
+  if (!dashboardState.convertToEur) {
+    meta.textContent = "Балансы показаны в валюте счета";
+    return;
+  }
+  if (dashboardState.exchangeRateError) {
+    meta.textContent = dashboardState.exchangeRateError;
+    return;
+  }
+  if (!dashboardState.exchangeRates) {
+    meta.textContent = "Загрузка курсов валют...";
+    return;
+  }
+  const updated = dashboardState.exchangeRates.updated
+    ? ` · обновлено: ${dashboardState.exchangeRates.updated}`
+    : "";
+  meta.textContent = `Конвертация через open.er-api.com${updated}`;
+}
+
+function summarizeBalances(balances) {
+  if (dashboardState.convertToEur) {
+    let total = 0;
+    let missingRates = 0;
+    for (const balance of balances) {
+      const converted = convertAmountToEur(balance.balance, balance.currency);
+      if (converted == null) {
+        missingRates += 1;
+      } else {
+        total += converted;
+      }
+    }
+    return {
+      primary: formatMoney(total, "EUR", { signed: true }),
+      details: missingRates ? `${missingRates} счетов без курса` : "Все счета пересчитаны",
+    };
+  }
+
+  const totalsByCurrency = new Map();
+  for (const balance of balances) {
+    const currency = normalizeText(balance.currency, "-");
+    totalsByCurrency.set(currency, (totalsByCurrency.get(currency) || 0) + balance.balance);
+  }
+  const parts = [...totalsByCurrency.entries()]
+    .sort(([left], [right]) => left.localeCompare(right, "ru"))
+    .map(([currency, value]) => formatMoney(value, currency, { signed: true }));
+  return {
+    primary: parts.join(" · ") || "-",
+    details: `${balances.length} счетов`,
+  };
+}
+
+function renderBalanceOverview(container, balances, filteredMovements) {
+  const overview = document.createElement("div");
+  overview.className = "balance-overview";
+  const summary = summarizeBalances(balances);
+  const metrics = [
+    ["Итог", summary.primary],
+    ["Счета", String(balances.length)],
+    ["Движения", String(filteredMovements.length)],
+    ["Статус курсов", summary.details],
+  ];
+
+  for (const [label, value] of metrics) {
+    const metric = document.createElement("div");
+    metric.className = "metric";
+    const labelEl = document.createElement("div");
+    labelEl.className = "metric-label";
+    labelEl.textContent = label;
+    const valueEl = document.createElement("div");
+    valueEl.className = "metric-value";
+    valueEl.textContent = value;
+    metric.appendChild(labelEl);
+    metric.appendChild(valueEl);
+    overview.appendChild(metric);
+  }
+  container.appendChild(overview);
+
+  document.getElementById("balanceSummary").textContent =
+    `Баланс: ${summary.primary} · ${summary.details}`;
+}
+
+function balancesGroupedBy(balances, field) {
+  const grouped = new Map();
+  for (const balance of balances) {
+    const key = normalizeText(balance[field], "-");
+    if (!grouped.has(key)) grouped.set(key, []);
+    grouped.get(key).push(balance);
+  }
+  return [...grouped.entries()].sort(([left], [right]) => left.localeCompare(right, "ru"));
+}
+
+function renderBalanceTable(rows) {
+  const wrap = document.createElement("div");
+  wrap.className = "table-wrap";
+  const table = document.createElement("table");
+  table.className = "balance-table";
+  table.innerHTML = `
+    <thead>
+      <tr>
+        <th>Счет</th>
+        <th>Валюта</th>
+        <th>Тип</th>
+        <th>Статус</th>
+        <th>Баланс</th>
+      </tr>
+    </thead>
+    <tbody></tbody>
+  `;
+  const tbody = table.querySelector("tbody");
+  for (const balance of rows) {
+    const tr = document.createElement("tr");
+    const values = [
+      balance.account,
+      normalizeText(balance.currency, "-"),
+      balance.accountType,
+      balance.accountStatus,
+      formatBalanceValue(balance),
+    ];
+    for (const [index, value] of values.entries()) {
+      const td = document.createElement("td");
+      td.textContent = value;
+      if (index === values.length - 1) {
+        td.className = `balance-amount${balance.balance < 0 ? " is-negative" : ""}`;
+      }
+      tr.appendChild(td);
+    }
+    tbody.appendChild(tr);
+  }
+  wrap.appendChild(table);
+  return wrap;
+}
+
+function renderBalanceDimension(container, title, field, balances) {
+  const section = document.createElement("section");
+  section.className = "balance-section";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  section.appendChild(heading);
+
+  for (const [group, rows] of balancesGroupedBy(balances, field)) {
+    const groupTitle = document.createElement("div");
+    groupTitle.className = "balance-group-title";
+    groupTitle.textContent = `${group} · ${rows.length} счетов`;
+    section.appendChild(groupTitle);
+    section.appendChild(renderBalanceTable(rows));
+  }
+
+  container.appendChild(section);
+}
+
+function renderBalance() {
+  const container = document.getElementById("balanceContent");
+  container.innerHTML = "";
+  renderRateMeta();
+
+  const filteredMovements = filterMovements(dashboardState.movements);
+  const balances = buildAccountBalances(filteredMovements);
+  renderBalanceOverview(container, balances, filteredMovements);
+
+  if (!balances.length) {
+    const empty = document.createElement("div");
+    empty.className = "empty-state";
+    empty.textContent = "Нет движений по выбранным фильтрам";
+    container.appendChild(empty);
+    return;
+  }
+
+  renderBalanceDimension(container, "В разрезе валюты", "currency", balances);
+  renderBalanceDimension(container, "В разрезе типа счета", "accountType", balances);
+  renderBalanceDimension(container, "В разрезе статуса счета", "accountStatus", balances);
+}
+
 function renderFilterOptions() {
   const expenses = dashboardState.expenses;
   const accounts = [
@@ -584,23 +892,68 @@ function renderFilterOptions() {
   }
 }
 
+function renderBalanceFilterOptions() {
+  const movements = dashboardState.movements;
+  const currencies = [
+    ...new Set(movements.map((movement) => normalizeText(movement.currency)).filter(Boolean)),
+  ].sort();
+  const accountTypes = [
+    ...new Set(movements.map((movement) => accountType(movement))),
+  ].sort((left, right) => left.localeCompare(right, "ru"));
+  const accountStatuses = [
+    ...new Set(movements.map((movement) => accountStatus(movement))),
+  ].sort((left, right) => left.localeCompare(right, "ru"));
+
+  setMultiSelectOptions(
+    "balanceCurrencyFilter",
+    currencies,
+    getMultiSelectedValues("balanceCurrencyFilter"),
+  );
+  setMultiSelectOptions(
+    "accountTypeFilter",
+    accountTypes,
+    getMultiSelectedValues("accountTypeFilter"),
+  );
+  setMultiSelectOptions(
+    "accountStatusFilter",
+    accountStatuses,
+    getMultiSelectedValues("accountStatusFilter"),
+  );
+
+  const dates = movements.map((movement) => movement.date).filter(Boolean).sort();
+  if (dates.length) {
+    const dateFrom = document.getElementById("balanceDateFrom");
+    const dateTo = document.getElementById("balanceDateTo");
+    dateFrom.min = dates[0];
+    dateFrom.max = dates[dates.length - 1];
+    dateTo.min = dates[0];
+    dateTo.max = dates[dates.length - 1];
+  }
+}
+
 function renderDashboard() {
   const filteredExpenses = filterExpenses(dashboardState.expenses);
   renderSummary();
   renderChart(filteredExpenses);
   renderDetails(filteredExpenses);
+  renderBalance();
 }
 
 async function loadDashboard() {
-  const summary = await api("/api/dashboard/summary");
-  const expenses = await api("/api/expenses?limit=50000");
+  const [summary, expenses, movements] = await Promise.all([
+    api("/api/dashboard/summary"),
+    api("/api/expenses?limit=50000"),
+    api("/api/expenses?expenses_only=false&limit=50000"),
+  ]);
   dashboardState = {
     ...dashboardState,
     lastSync: summary.last_sync,
     googleSheetsUrl: summary.google_sheets_url,
     expenses,
+    movements,
   };
   renderFilterOptions();
+  renderBalanceFilterOptions();
   renderDashboard();
 }
 
@@ -625,13 +978,60 @@ async function syncFromSheets() {
 function resetFilters() {
   document.getElementById("dateFrom").value = "";
   document.getElementById("dateTo").value = "";
-  for (const checkbox of document.querySelectorAll(".multi-select input[type='checkbox']")) {
+  for (const checkbox of document.querySelectorAll(
+    "#accountFilter input[type='checkbox'], #excludedCategoryFilter input[type='checkbox']",
+  )) {
     checkbox.checked = false;
   }
   document.getElementById("minCategoryTotal").value = "";
   dashboardState.selectedCategory = null;
   renderFilterOptions();
   renderDashboard();
+}
+
+function resetBalanceFilters() {
+  document.getElementById("balanceDateFrom").value = "";
+  document.getElementById("balanceDateTo").value = "";
+  for (const checkbox of document.querySelectorAll(
+    "#balanceCurrencyFilter input[type='checkbox'], #accountTypeFilter input[type='checkbox'], #accountStatusFilter input[type='checkbox']",
+  )) {
+    checkbox.checked = false;
+  }
+  document.getElementById("convertToEur").checked = false;
+  dashboardState.convertToEur = false;
+  renderBalanceFilterOptions();
+  renderDashboard();
+}
+
+function setActiveView(view) {
+  dashboardState.activeView = view;
+  document.getElementById("pageTitle").textContent = view === "balance" ? "Баланс" : "Расходы";
+  document.getElementById("expenseView").classList.toggle("is-hidden", view !== "expenses");
+  document.getElementById("balanceView").classList.toggle("is-hidden", view !== "balance");
+  for (const [buttonId, buttonView] of [
+    ["expensesTab", "expenses"],
+    ["balanceTab", "balance"],
+  ]) {
+    const button = document.getElementById(buttonId);
+    const active = view === buttonView;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", String(active));
+  }
+  renderDashboard();
+}
+
+async function handleConvertToEurChange(event) {
+  dashboardState.convertToEur = event.target.checked;
+  dashboardState.exchangeRateError = null;
+  renderBalance();
+  if (!dashboardState.convertToEur) return;
+
+  try {
+    await ensureExchangeRates();
+  } catch (error) {
+    dashboardState.exchangeRateError = error.message;
+  }
+  renderBalance();
 }
 
 for (const id of [
@@ -648,8 +1048,22 @@ for (const id of [
   });
 }
 
+for (const id of [
+  "balanceDateFrom",
+  "balanceDateTo",
+  "balanceCurrencyFilter",
+  "accountTypeFilter",
+  "accountStatusFilter",
+]) {
+  document.getElementById(id).addEventListener("change", renderDashboard);
+}
+
 document.getElementById("syncButton").addEventListener("click", syncFromSheets);
 document.getElementById("resetFilters").addEventListener("click", resetFilters);
+document.getElementById("resetBalanceFilters").addEventListener("click", resetBalanceFilters);
+document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
+document.getElementById("balanceTab").addEventListener("click", () => setActiveView("balance"));
+document.getElementById("convertToEur").addEventListener("change", handleConvertToEurChange);
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
 });

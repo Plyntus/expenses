@@ -11,10 +11,15 @@
     <main class="app-shell">
       <header class="page-header panel">
         <div class="header-main">
-          <h1>Расходы</h1>
+          <h1 id="pageTitle">Расходы</h1>
           <div class="summary-row" aria-live="polite">
             <p id="overallSummary" class="summary-text">Всего: -</p>
+            <p id="balanceSummary" class="summary-text is-hidden">Баланс: -</p>
           </div>
+          <nav class="view-tabs" aria-label="Разделы продукта">
+            <button id="expensesTab" class="view-tab is-active" type="button" aria-pressed="true">Расходы</button>
+            <button id="balanceTab" class="view-tab" type="button" aria-pressed="false">Баланс</button>
+          </nav>
         </div>
         <div class="sync-panel">
           <button id="syncButton" type="button">Синхронизировать</button>
@@ -24,6 +29,7 @@
 
       <section id="syncError" class="sync-error" hidden></section>
 
+      <section id="expenseView" class="view-page">
       <section class="panel filters-panel" aria-label="Фильтры расходов">
         <div class="filter-item">
           <label for="dateFrom">Период от</label>
@@ -59,7 +65,7 @@
       <section id="detailsSection" class="panel table-panel is-hidden">
         <h2 id="detailsTitle">Транзакции</h2>
         <div class="table-wrap">
-          <table>
+          <table class="transaction-table">
             <thead>
               <tr>
                 <th>Дата</th>
@@ -72,6 +78,45 @@
             <tbody id="transactionRows"></tbody>
           </table>
         </div>
+      </section>
+      </section>
+
+      <section id="balanceView" class="view-page is-hidden">
+        <section class="panel filters-panel" aria-label="Фильтры баланса счетов">
+          <div class="filter-item">
+            <label for="balanceDateFrom">Период от</label>
+            <input id="balanceDateFrom" type="date" />
+          </div>
+          <div class="filter-item">
+            <label for="balanceDateTo">Период до</label>
+            <input id="balanceDateTo" type="date" />
+          </div>
+          <div class="filter-item">
+            <label id="balanceCurrencyFilterLabel">Валюта</label>
+            <div id="balanceCurrencyFilter" class="multi-select" data-placeholder="Все валюты"></div>
+          </div>
+          <div class="filter-item">
+            <label id="accountTypeFilterLabel">Тип счета</label>
+            <div id="accountTypeFilter" class="multi-select" data-placeholder="Все типы"></div>
+          </div>
+          <div class="filter-item">
+            <label id="accountStatusFilterLabel">Статус счета</label>
+            <div id="accountStatusFilter" class="multi-select" data-placeholder="Все статусы"></div>
+          </div>
+          <label class="toggle-filter">
+            <input id="convertToEur" type="checkbox" />
+            <span>в EUR</span>
+          </label>
+          <button id="resetBalanceFilters" class="secondary-button" type="button">Сбросить</button>
+        </section>
+
+        <section class="panel balance-panel">
+          <div class="balance-panel-header">
+            <h2>Баланс счетов</h2>
+            <p id="rateMeta" class="sync-meta">Курсы будут загружены при переключении в EUR</p>
+          </div>
+          <div id="balanceContent" class="balance-content"></div>
+        </section>
       </section>
     </main>
     <script src="/static/app.js"></script>

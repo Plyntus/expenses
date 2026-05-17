@@ -110,6 +110,7 @@ Initial migration creates:
 
 - `GET /api/health`
 - `GET /api/expenses?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD&category=...`
+- `GET /api/expenses?expenses_only=false&limit=50000` for all account movements, including income
 - `GET /api/dashboard/summary`
 - `POST /api/sync/google-sheets`
 - `GET /api/sync/last`
