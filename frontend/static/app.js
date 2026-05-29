@@ -449,17 +449,14 @@ function getPrimaryCurrency(expenses) {
   );
 }
 
-function renderSummary() {
+function renderSummary(filteredExpenses) {
   document.getElementById("overallSummary").classList.toggle(
     "is-hidden",
     dashboardState.activeView !== "expenses",
   );
 
-  const currency = getPrimaryCurrency(dashboardState.expenses);
-  const allForCurrency = dashboardState.expenses.filter(
-    (expense) => !currency || normalizeText(expense.currency) === currency,
-  );
-  const overall = summarizeExpenses(allForCurrency);
+  const currency = getPrimaryCurrency(filteredExpenses);
+  const overall = summarizeExpenses(filteredExpenses);
 
   document.getElementById("overallSummary").textContent =
     `Всего: ${formatMoney(overall.total, currency)} · ${overall.count} транзакций`;
@@ -865,7 +862,7 @@ function renderBalanceFilterOptions() {
 
 function renderDashboard() {
   const filteredExpenses = filterExpenses(dashboardState.expenses);
-  renderSummary();
+  renderSummary(filteredExpenses);
   renderChart(filteredExpenses);
   renderDetails(filteredExpenses);
   renderBalance();
