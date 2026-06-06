@@ -17,6 +17,8 @@ class Settings:
     google_service_account_json: str | None
     google_application_credentials: Path | None
     telegram_bot_token: str | None
+    telegram_daily_report_chat_id: int | None
+    telegram_daily_report_timezone: str
     openai_api_key: str | None
     openai_transcribe_model: str
     openai_text_model: str
@@ -50,6 +52,11 @@ def load_settings() -> Settings:
         if credentials_path
         else None,
         telegram_bot_token=os.getenv("TELEGRAM_BOT_TOKEN"),
+        telegram_daily_report_chat_id=_optional_int(
+            os.getenv("TELEGRAM_DAILY_REPORT_CHAT_ID")
+        ),
+        telegram_daily_report_timezone=os.getenv("TELEGRAM_DAILY_REPORT_TIMEZONE")
+        or "CET",
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_transcribe_model=os.getenv(
             "OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"
@@ -63,6 +70,12 @@ def load_settings() -> Settings:
             os.getenv("SYSTEM_PROMPT_PATH", "app/llm/prompts.py")
         ),
     )
+
+
+def _optional_int(value: str | None) -> int | None:
+    if value is None or not value.strip():
+        return None
+    return int(value)
 
 
 def get_google_service_account_info(settings: Settings) -> dict | None:

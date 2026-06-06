@@ -54,6 +54,8 @@ For the Telegram bot also fill:
 
 ```text
 TELEGRAM_BOT_TOKEN=
+TELEGRAM_DAILY_REPORT_CHAT_ID=
+TELEGRAM_DAILY_REPORT_TIMEZONE=CET
 OPENAI_API_KEY=
 ```
 
@@ -169,6 +171,18 @@ docker compose --profile bot up bot
 ```
 
 Send a text or voice message. After confirmation, the bot should answer that rows were appended to Google Sheets.
+
+If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`:
+
+```text
+Траты за сегодня: [сумма трат за день]
+В этом месяце: [сумма трат за текущий месяц]
+Последняя транзакция: [дата, сумма и "comment" последней транзакции]
+```
+
+Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table.
+
+If the chat id is not configured yet, send `/start` to the bot and use the chat id shown in the reply.
 
 ## Coolify / VPS
 

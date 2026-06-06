@@ -9,6 +9,7 @@ from aiogram import Bot, F, Router
 from aiogram.filters import CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
+from app.core.config import settings
 from app.llm.expense_parser import (
     ExpenseParser,
     dataframe_to_confirmation_text,
@@ -25,10 +26,13 @@ sheets_writer: SheetsWriter
 
 @router.message(CommandStart())
 async def start(message: Message) -> None:
-    await message.answer(
+    text = (
         "Отправь голосовое или текст. Я распознаю расход, покажу таблицу "
         "и после подтверждения допишу ее в Google Sheets."
     )
+    if not settings.telegram_daily_report_chat_id:
+        text += f"\n\nID этого чата для ежедневного отчета: {message.chat.id}"
+    await message.answer(text)
 
 
 @router.message(F.voice)
