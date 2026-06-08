@@ -104,7 +104,7 @@ def build_daily_report_message(db: Session, report_date: date) -> str:
         date_from=report_date,
         date_to=report_date,
     )
-    month_spending = _spending_total(
+    monthly_spending_by_account = _spending_by_account(
         db,
         date_from=month_start,
         date_to=report_date,
@@ -114,7 +114,8 @@ def build_daily_report_message(db: Session, report_date: date) -> str:
     return "\n".join(
         [
             f"Траты за сегодня: {_format_amount(today_spending)}",
-            f"В этом месяце: {_format_amount(month_spending)}",
+            "В этом месяце:",
+            *_format_spending_by_account(monthly_spending_by_account),
             f"Последняя транзакция: {_format_latest_transaction(latest)}",
         ]
     )
@@ -131,20 +132,48 @@ def _spending_total(db: Session, *, date_from: date, date_to: date) -> Decimal:
     return _decimal(value)
 
 
+def _spending_by_account(
+    db: Session, *, date_from: date, date_to: date
+) -> list[tuple[str, Decimal]]:
+    total = func.sum(func.abs(Expense.amount)).label("total")
+    rows = db.execute(
+        select(Expense.payment_method, total)
+        .where(
+            Expense.amount < 0,
+            Expense.date >= date_from,
+            Expense.date <= date_to,
+        )
+        .group_by(Expense.payment_method)
+        .order_by(desc(total), Expense.payment_method)
+    ).all()
+    return [(_account_name(row[0]), _decimal(row[1])) for row in rows]
+
+
 def _latest_transaction(db: Session) -> Expense | None:
     return db.scalar(
         select(Expense).order_by(desc(Expense.date), desc(Expense.id)).limit(1)
     )
 
 
+def _format_spending_by_account(items: list[tuple[str, Decimal]]) -> list[str]:
+    if not items:
+        return ["- нет трат"]
+    return [f"- {account} : {_format_amount(total)}" for account, total in items]
+
+
 def _format_latest_transaction(expense: Expense | None) -> str:
     if expense is None:
         return "нет транзакций"
     comment = expense.comment or ""
+    currency = f" {expense.currency}" if expense.currency else ""
     return (
         f'{expense.date.strftime("%d.%m.%Y")}, '
-        f'{_format_amount(expense.amount)}, "{comment}"'
+        f'{_format_amount(expense.amount)}{currency}, "{comment}"'
     )
+
+
+def _account_name(value: str | None) -> str:
+    return value.strip() if value and value.strip() else "Без счета"
 
 
 def _format_amount(value: Decimal) -> str:

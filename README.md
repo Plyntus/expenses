@@ -176,8 +176,10 @@ If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 
 
 ```text
 Траты за сегодня: [сумма трат за день]
-В этом месяце: [сумма трат за текущий месяц]
-Последняя транзакция: [дата, сумма и "comment" последней транзакции]
+В этом месяце:
+- [счет Account] : [сумма трат за текущий месяц]
+- [счет Account] : [сумма трат за текущий месяц]
+Последняя транзакция: [дата, сумма, валюта и "comment" последней транзакции]
 ```
 
 Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table.
