@@ -14,6 +14,7 @@ class Settings:
     google_sheets_id: str | None
     google_sheets_url: str | None
     google_worksheet_name: str
+    google_budget_worksheet_name: str
     google_service_account_json: str | None
     google_application_credentials: Path | None
     telegram_bot_token: str | None
@@ -47,6 +48,8 @@ def load_settings() -> Settings:
         or os.getenv("GOOGLE_SPREADSHEET_ID"),
         google_sheets_url=os.getenv("GOOGLE_SHEETS_URL"),
         google_worksheet_name=os.getenv("GOOGLE_WORKSHEET_NAME", "Trans"),
+        google_budget_worksheet_name=os.getenv("GOOGLE_BUDGET_WORKSHEET_NAME")
+        or "budget",
         google_service_account_json=os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON"),
         google_application_credentials=Path(credentials_path).expanduser()
         if credentials_path

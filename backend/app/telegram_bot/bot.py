@@ -44,6 +44,7 @@ async def main() -> None:
                 sheets_client=sheets_client,
                 session_factory=SessionLocal,
                 timezone_name=settings.telegram_daily_report_timezone,
+                budget_worksheet_name=settings.google_budget_worksheet_name,
             )
         )
     else:

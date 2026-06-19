@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
@@ -17,6 +19,39 @@ from app.sheets.sync_service import sync_google_sheets_to_postgres
 logger = logging.getLogger(__name__)
 
 REPORT_TIME = time(hour=22, minute=0)
+REPORT_CURRENCY = "EUR"
+OTHER_CATEGORY_KEY = "остальное"
+MONTH_NAMES_RU = {
+    1: "января",
+    2: "февраля",
+    3: "марта",
+    4: "апреля",
+    5: "мая",
+    6: "июня",
+    7: "июля",
+    8: "августа",
+    9: "сентября",
+    10: "октября",
+    11: "ноября",
+    12: "декабря",
+}
+
+
+@dataclass(frozen=True)
+class BudgetCategory:
+    category: str
+    category_key: str
+    budget: Decimal
+    currency: str
+    currency_key: str
+
+
+@dataclass(frozen=True)
+class BudgetCategorySpend:
+    category: str
+    spent: Decimal
+    budget: Decimal
+    currency: str
 
 
 async def run_daily_report_scheduler(
@@ -26,6 +61,7 @@ async def run_daily_report_scheduler(
     sheets_client: GoogleSheetsClient,
     session_factory: sessionmaker[Session],
     timezone_name: str,
+    budget_worksheet_name: str,
 ) -> None:
     try:
         timezone = ZoneInfo(timezone_name)
@@ -51,6 +87,7 @@ async def run_daily_report_scheduler(
                 chat_id=chat_id,
                 sheets_client=sheets_client,
                 session_factory=session_factory,
+                budget_worksheet_name=budget_worksheet_name,
                 report_date=datetime.now(timezone).date(),
             )
         except asyncio.CancelledError:
@@ -77,6 +114,7 @@ async def send_daily_report(
     chat_id: int,
     sheets_client: GoogleSheetsClient,
     session_factory: sessionmaker[Session],
+    budget_worksheet_name: str,
     report_date: date,
 ) -> None:
     with session_factory() as db:
@@ -92,92 +130,258 @@ async def send_daily_report(
                 sync_run.error_message,
             )
 
-        message = build_daily_report_message(db, report_date)
+        budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
+        budget_categories = parse_budget_sheet(budget_values)
+        message = build_daily_report_message(db, report_date, budget_categories)
 
     await bot.send_message(chat_id=chat_id, text=message)
 
 
-def build_daily_report_message(db: Session, report_date: date) -> str:
+def build_daily_report_message(
+    db: Session, report_date: date, budget_categories: list[BudgetCategory]
+) -> str:
     month_start = report_date.replace(day=1)
-    today_spending = _spending_total(
-        db,
-        date_from=report_date,
-        date_to=report_date,
-    )
-    monthly_spending_by_account = _spending_by_account(
+    monthly_spending = _spending_total(
         db,
         date_from=month_start,
         date_to=report_date,
+        currency=REPORT_CURRENCY,
     )
-    latest = _latest_transaction(db)
+    latest_date = _latest_transaction_date(
+        db,
+        date_from=month_start,
+        date_to=report_date,
+        currency=REPORT_CURRENCY,
+    )
+    category_spending = _budget_category_spending(
+        db,
+        budget_categories=budget_categories,
+        date_from=month_start,
+        date_to=report_date,
+    )
 
     return "\n".join(
         [
-            f"Траты за сегодня: {_format_amount(today_spending)}",
-            "В этом месяце:",
-            *_format_spending_by_account(monthly_spending_by_account),
-            f"Последняя транзакция: {_format_latest_transaction(latest)}",
+            (
+                f"За текущий месяц потрачено {_format_amount(monthly_spending)} "
+                f"{REPORT_CURRENCY}. Последняя дата: "
+                f"{_format_report_date(latest_date)}."
+            ),
+            "Категории:",
+            *_format_budget_category_spending(category_spending),
         ]
     )
 
 
-def _spending_total(db: Session, *, date_from: date, date_to: date) -> Decimal:
+def parse_budget_sheet(values: list[list[str]]) -> list[BudgetCategory]:
+    if not values:
+        raise ValueError("Budget sheet is empty")
+
+    header_indexes = {
+        _budget_header_key(header): index for index, header in enumerate(values[0])
+    }
+    required_headers = {"category", "budget", "currency"}
+    missing_headers = sorted(required_headers - set(header_indexes))
+    if missing_headers:
+        raise ValueError(
+            "Budget sheet is missing expected headers: "
+            f"{missing_headers}. Sheet header: {values[0]}"
+        )
+
+    categories: list[BudgetCategory] = []
+    for row_number, raw_row in enumerate(values[1:], start=2):
+        if not any(str(cell).strip() for cell in raw_row):
+            continue
+        category = _row_cell(raw_row, header_indexes["category"]).strip()
+        if not category:
+            raise ValueError(f"Budget row {row_number}: Category is empty")
+        budget = _parse_budget_amount(_row_cell(raw_row, header_indexes["budget"]))
+        currency = _currency_key(_row_cell(raw_row, header_indexes["currency"]))
+        if not currency:
+            raise ValueError(f"Budget row {row_number}: Currency is empty")
+        categories.append(
+            BudgetCategory(
+                category=category,
+                category_key=_category_key(category),
+                budget=budget,
+                currency=currency,
+                currency_key=_currency_key(currency),
+            )
+        )
+
+    if not categories:
+        raise ValueError("Budget sheet has no budget rows")
+    return categories
+
+
+def _spending_total(
+    db: Session, *, date_from: date, date_to: date, currency: str
+) -> Decimal:
     value = db.scalar(
         select(func.coalesce(func.sum(func.abs(Expense.amount)), 0)).where(
-            Expense.amount < 0,
-            Expense.date >= date_from,
-            Expense.date <= date_to,
+            *_expense_filters(date_from=date_from, date_to=date_to, currency=currency)
         )
     )
     return _decimal(value)
 
 
-def _spending_by_account(
+def _budget_category_spending(
+    db: Session,
+    *,
+    budget_categories: list[BudgetCategory],
+    date_from: date,
+    date_to: date,
+) -> list[BudgetCategorySpend]:
+    spending = _spending_by_category_and_currency(
+        db, date_from=date_from, date_to=date_to
+    )
+    explicit_categories_by_currency: dict[str, set[str]] = {}
+    for item in budget_categories:
+        if item.category_key == OTHER_CATEGORY_KEY:
+            continue
+        explicit_categories_by_currency.setdefault(item.currency_key, set()).add(
+            item.category_key
+        )
+
+    report_items: list[BudgetCategorySpend] = []
+    for item in budget_categories:
+        if item.category_key == OTHER_CATEGORY_KEY:
+            explicit_keys = explicit_categories_by_currency.get(item.currency_key, set())
+            spent = sum(
+                total
+                for (currency_key, category_key), total in spending.items()
+                if currency_key == item.currency_key and category_key not in explicit_keys
+            )
+        else:
+            spent = spending.get((item.currency_key, item.category_key), Decimal("0"))
+
+        report_items.append(
+            BudgetCategorySpend(
+                category=item.category,
+                spent=spent,
+                budget=item.budget,
+                currency=item.currency,
+            )
+        )
+    return report_items
+
+
+def _spending_by_category_and_currency(
     db: Session, *, date_from: date, date_to: date
-) -> list[tuple[str, Decimal]]:
+) -> dict[tuple[str, str], Decimal]:
     total = func.sum(func.abs(Expense.amount)).label("total")
     rows = db.execute(
-        select(Expense.payment_method, total)
+        select(Expense.currency, Expense.category, total)
         .where(
             Expense.amount < 0,
             Expense.date >= date_from,
             Expense.date <= date_to,
         )
-        .group_by(Expense.payment_method)
-        .order_by(desc(total), Expense.payment_method)
+        .group_by(Expense.currency, Expense.category)
     ).all()
-    return [(_account_name(row[0]), _decimal(row[1])) for row in rows]
+    return {
+        (_currency_key(row[0]), _category_key(row[1])): _decimal(row[2])
+        for row in rows
+    }
 
 
-def _latest_transaction(db: Session) -> Expense | None:
+def _latest_transaction_date(
+    db: Session, *, date_from: date, date_to: date, currency: str
+) -> date | None:
     return db.scalar(
-        select(Expense).order_by(desc(Expense.date), desc(Expense.id)).limit(1)
+        select(Expense.date)
+        .where(*_expense_filters(date_from=date_from, date_to=date_to, currency=currency))
+        .order_by(desc(Expense.date), desc(Expense.id))
+        .limit(1)
     )
 
 
-def _format_spending_by_account(items: list[tuple[str, Decimal]]) -> list[str]:
-    if not items:
-        return ["- нет трат"]
-    return [f"- {account} : {_format_amount(total)}" for account, total in items]
-
-
-def _format_latest_transaction(expense: Expense | None) -> str:
-    if expense is None:
-        return "нет транзакций"
-    comment = expense.comment or ""
-    currency = f" {expense.currency}" if expense.currency else ""
+def _expense_filters(*, date_from: date, date_to: date, currency: str):
     return (
-        f'{expense.date.strftime("%d.%m.%Y")}, '
-        f'{_format_amount(expense.amount)}{currency}, "{comment}"'
+        Expense.amount < 0,
+        Expense.date >= date_from,
+        Expense.date <= date_to,
+        func.upper(func.coalesce(Expense.currency, "")) == _currency_key(currency),
     )
 
 
-def _account_name(value: str | None) -> str:
-    return value.strip() if value and value.strip() else "Без счета"
+def _format_budget_category_spending(
+    items: list[BudgetCategorySpend],
+) -> list[str]:
+    if not items:
+        return ["нет категорий"]
+    return [
+        f"{item.category}: {_format_amount(item.spent)} ({_format_budget_percent(item)})"
+        for item in items
+    ]
+
+
+def _format_budget_percent(item: BudgetCategorySpend) -> str:
+    if item.budget == 0:
+        return "0%" if item.spent == 0 else "n/a"
+    percent = (item.spent / item.budget * Decimal("100")).quantize(
+        Decimal("1"), rounding=ROUND_HALF_UP
+    )
+    return f"{percent}%"
+
+
+def _format_report_date(value: date | None) -> str:
+    if value is None:
+        return "нет транзакций"
+    return f"{value.day} {MONTH_NAMES_RU[value.month]}"
+
+
+def _budget_header_key(value: object) -> str:
+    key = str(value).strip().lower().replace("ё", "е")
+    key = re.sub(r"\s+", " ", key)
+    return {
+        "category": "category",
+        "категория": "category",
+        "budget": "budget",
+        "бюджет": "budget",
+        "currency": "currency",
+        "валюта": "currency",
+    }.get(key, key)
+
+
+def _row_cell(row: list[str], index: int) -> str:
+    return str(row[index]).strip() if index < len(row) else ""
+
+
+def _parse_budget_amount(value: object) -> Decimal:
+    text = str(value).strip()
+    if not text:
+        return Decimal("0")
+    cleaned = text.replace("\u00a0", "").replace(" ", "")
+    cleaned = re.sub(r"[^0-9,.\-]", "", cleaned)
+    if "," in cleaned and "." in cleaned:
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return Decimal(cleaned).quantize(Decimal("0.01"))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"Invalid Budget: {value}") from exc
+
+
+def _category_key(value: object) -> str:
+    text = str(value or "").strip().lower().replace("ё", "е")
+    text = re.sub(r"\s+", " ", text)
+    return text or "без категории"
+
+
+def _currency_key(value: object) -> str:
+    return str(value or "").strip().upper()
 
 
 def _format_amount(value: Decimal) -> str:
-    return f"{value.quantize(Decimal('0.01')):,.2f}".replace(",", " ")
+    amount = value.quantize(Decimal("0.01"))
+    if amount == amount.to_integral_value():
+        return f"{amount:,.0f}".replace(",", " ")
+    return f"{amount:,.2f}".replace(",", " ")
 
 
 def _decimal(value: object) -> Decimal:

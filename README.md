@@ -45,6 +45,7 @@ cp .env.example .env
 POSTGRES_PASSWORD=
 GOOGLE_SHEETS_ID=
 GOOGLE_WORKSHEET_NAME=Trans
+GOOGLE_BUDGET_WORKSHEET_NAME=budget
 GOOGLE_SERVICE_ACCOUNT_JSON=
 APP_USERNAME=
 APP_PASSWORD=
@@ -172,17 +173,23 @@ docker compose --profile bot up bot
 
 Send a text or voice message. After confirmation, the bot should answer that rows were appended to Google Sheets.
 
-If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`:
+If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`.
+The report reads budget rows from `GOOGLE_BUDGET_WORKSHEET_NAME` with these columns:
+
+- `Category`
+- `Budget`
+- `Currency`
+
+The daily report focuses on current calendar-month EUR spending:
 
 ```text
-Траты за сегодня: [сумма трат за день]
-В этом месяце:
-- [счет Account] : [сумма трат за текущий месяц]
-- [счет Account] : [сумма трат за текущий месяц]
-Последняя транзакция: [дата, сумма, валюта и "comment" последней транзакции]
+За текущий месяц потрачено [sum] EUR. Последняя дата: [date of last transaction].
+Категории:
+[Category]: [sum of spend] ([% from budget])
+[Category]: [sum of spend] ([% from budget])
 ```
 
-Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table.
+Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed in the budget sheet for the same currency, so all matching expenses are distributed across budget categories.
 
 If the chat id is not configured yet, send `/start` to the bot and use the chat id shown in the reply.
 

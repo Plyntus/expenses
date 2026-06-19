@@ -34,13 +34,16 @@ class GoogleSheetsClient:
     async def get_all_values(self) -> list[list[str]]:
         return await asyncio.to_thread(self._get_all_values_sync)
 
+    async def get_worksheet_values(self, worksheet_name: str) -> list[list[str]]:
+        return await asyncio.to_thread(self._get_worksheet_values_sync, worksheet_name)
+
     async def append_rows(self, rows: list[dict[str, Any]]) -> None:
         return await asyncio.to_thread(self._append_rows_sync, rows)
 
-    def _worksheet(self):
+    def _worksheet(self, worksheet_name: str | None = None):
         client = self._gspread_client()
         spreadsheet = client.open_by_key(self._spreadsheet_id)
-        return spreadsheet.worksheet(self._worksheet_name)
+        return spreadsheet.worksheet(worksheet_name or self._worksheet_name)
 
     def _gspread_client(self):
         info = get_google_service_account_info(self._settings)
@@ -56,6 +59,9 @@ class GoogleSheetsClient:
 
     def _get_all_values_sync(self) -> list[list[str]]:
         return self._worksheet().get_all_values()
+
+    def _get_worksheet_values_sync(self, worksheet_name: str) -> list[list[str]]:
+        return self._worksheet(worksheet_name).get_all_values()
 
     def _append_rows_sync(self, rows: list[dict[str, Any]]) -> None:
         worksheet = self._worksheet()
