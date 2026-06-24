@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pandas as pd
 from aiogram import Bot, F, Router
-from aiogram.filters import CommandStart
+from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
 from app.core.config import settings
@@ -28,11 +28,32 @@ sheets_writer: SheetsWriter
 async def start(message: Message) -> None:
     text = (
         "Отправь голосовое или текст. Я распознаю расход, покажу таблицу "
-        "и после подтверждения допишу ее в Google Sheets."
+        "и после подтверждения допишу ее в Google Sheets.\n\n"
+        "Команды: /last5 - пять последних трат."
     )
     if not settings.telegram_daily_report_chat_id:
         text += f"\n\nID этого чата для ежедневного отчета: {message.chat.id}"
     await message.answer(text)
+
+
+@router.message(Command("last5"))
+async def last5(message: Message) -> None:
+    try:
+        expenses = await sheets_writer.list_last_expenses(limit=5)
+    except Exception as exc:
+        logging.exception("Failed to list last expenses")
+        await message.answer(f"Не получилось получить последние траты: {exc}")
+        return
+
+    if not expenses:
+        await message.answer("Трат пока нет.")
+        return
+
+    lines = [
+        f"- {expense.date.isoformat()} - {expense.amount:.2f} - {expense.comment or '-'}"
+        for expense in expenses
+    ]
+    await message.answer("\n".join(lines))
 
 
 @router.message(F.voice)
