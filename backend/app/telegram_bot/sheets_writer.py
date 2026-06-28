@@ -38,4 +38,4 @@ class SheetsWriter:
             expenses.append(expense)
             if len(expenses) >= limit:
                 break
-        return expenses
+        return list(reversed(expenses))

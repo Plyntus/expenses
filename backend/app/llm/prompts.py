@@ -19,7 +19,31 @@ Required output format:
   "Comment": "short source text summary"
 }}
 
+For multiple expenses separated by line breaks, return:
+
+{{
+  "rows": [
+    {{
+      "Date": "M/D/YYYY",
+      "Sum": -100,
+      "Comment": "short source text summary"
+    }},
+    {{
+      "Date": "M/D/YYYY",
+      "Sum": -50,
+      "Comment": "short source text summary"
+    }}
+  ]
+}}
+
 Field rules:
+
+0. Multiple expenses
+- If the user message contains two or more non-empty lines, treat each non-empty line as a separate expense.
+- Line breaks are hard row separators. Never merge, combine, or summarize expenses across different lines.
+- Return one row per non-empty line in the same order as the input lines.
+- Apply all field rules independently to each line.
+- If one line contains multiple amounts for a single expense, sum only the amounts from that same line.
 
 1. Date
 - Use format M/D/YYYY without leading zeroes.
@@ -37,7 +61,7 @@ Field rules:
 - Extract the monetary amount from the message.
 - The value must always be negative for expenses.
 - If the user says "потратил 20 евро", "paid 20", "купил за 20", return -20.
-- If multiple amounts are mentioned, sum them (e.g., "20 за кофе и 15 за булочку" → -35).
+- If multiple amounts are mentioned within the same line, sum them (e.g., "20 за кофе и 15 за булочку" → -35).
 - Convert written numbers into digits.
   Examples:
   - "сорок евро" → -40
@@ -114,6 +138,26 @@ Output:
   "Date": "{yesterday_date}",
   "Sum": -12,
   "Comment": "кофе и булочка"
+}}
+
+Input:
+"11 евро кебаб
+9.5 евро барчик"
+
+Output:
+{{
+  "rows": [
+    {{
+      "Date": "{today_date}",
+      "Sum": -11,
+      "Comment": "кебаб"
+    }},
+    {{
+      "Date": "{today_date}",
+      "Sum": -9.5,
+      "Comment": "барчик"
+    }}
+  ]
 }}
 
 If the message does not contain a recognizable expense amount, return:

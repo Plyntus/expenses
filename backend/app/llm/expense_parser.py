@@ -55,6 +55,15 @@ class ExpenseParser:
         return get_system_prompt()
 
     def _structure_text_sync(self, user_text: str) -> str:
+        lines = _non_empty_lines(user_text)
+        if len(lines) > 1:
+            rows: list[dict[str, Any]] = []
+            for line in lines:
+                rows.extend(parse_rows(self._structure_single_text_sync(line)))
+            return json.dumps({"rows": rows}, ensure_ascii=False)
+        return self._structure_single_text_sync(user_text)
+
+    def _structure_single_text_sync(self, user_text: str) -> str:
         response = self._client.chat.completions.create(
             model=self._text_model,
             response_format={"type": "json_object"},
@@ -67,6 +76,10 @@ class ExpenseParser:
         if not content:
             raise ValueError("OpenAI returned an empty response")
         return content
+
+
+def _non_empty_lines(text: str) -> list[str]:
+    return [line.strip() for line in text.splitlines() if line.strip()]
 
 
 def parse_rows(
