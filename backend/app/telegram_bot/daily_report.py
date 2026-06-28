@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 REPORT_TIME = time(hour=22, minute=0)
 REPORT_CURRENCY = "EUR"
 OTHER_CATEGORY_KEY = "остальное"
+REPORT_SYNC_OK_STATUSES = {"success", "partial_success"}
 MONTH_NAMES_RU = {
     1: "января",
     2: "февраля",
@@ -117,24 +118,47 @@ async def send_daily_report(
     budget_worksheet_name: str,
     report_date: date,
 ) -> None:
+    await sync_google_sheets_before_daily_report(
+        session_factory=session_factory,
+        sheets_client=sheets_client,
+    )
+
+    budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
+    budget_categories = parse_budget_sheet(budget_values)
+
+    with session_factory() as db:
+        message = build_daily_report_message(db, report_date, budget_categories)
+
+    await bot.send_message(chat_id=chat_id, text=message)
+
+
+async def sync_google_sheets_before_daily_report(
+    *,
+    session_factory: sessionmaker[Session],
+    sheets_client: GoogleSheetsClient,
+) -> None:
     with session_factory() as db:
         sync_run = await sync_google_sheets_to_postgres(
             db,
             sheets_client,
             triggered_by="telegram_daily_report",
         )
-        if sync_run.status != "success":
-            logger.warning(
-                "Google Sheets sync before daily report finished with status=%s: %s",
-                sync_run.status,
-                sync_run.error_message,
-            )
 
-        budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
-        budget_categories = parse_budget_sheet(budget_values)
-        message = build_daily_report_message(db, report_date, budget_categories)
-
-    await bot.send_message(chat_id=chat_id, text=message)
+    if sync_run.status not in REPORT_SYNC_OK_STATUSES:
+        raise RuntimeError(
+            "Google Sheets sync before daily report failed: "
+            f"{sync_run.error_message or sync_run.status}"
+        )
+    if sync_run.status != "success":
+        logger.warning(
+            "Google Sheets sync before daily report finished with status=%s: %s",
+            sync_run.status,
+            sync_run.error_message,
+        )
+    logger.info(
+        "Google Sheets sync before daily report imported %s rows",
+        sync_run.rows_imported,
+    )
 
 
 def build_daily_report_message(
