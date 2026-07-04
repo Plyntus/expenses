@@ -30,7 +30,9 @@ async def main() -> None:
         system_prompt_path=settings.system_prompt_path,
     )
     sheets_client = GoogleSheetsClient(settings)
+    handlers.sheets_client = sheets_client
     handlers.sheets_writer = SheetsWriter(sheets_client)
+    handlers.session_factory = SessionLocal
 
     bot = Bot(token=settings.telegram_bot_token)
     dispatcher = Dispatcher()

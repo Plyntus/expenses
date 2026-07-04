@@ -173,6 +173,12 @@ docker compose --profile bot up bot
 
 Send a text or voice message. After confirmation, the bot should answer that rows were appended to Google Sheets.
 
+Available commands:
+
+- `/help` - show available commands
+- `/last5` - show five latest expenses from Google Sheets
+- `/report` - send the current monthly report on demand
+
 If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`.
 The report reads budget rows from `GOOGLE_BUDGET_WORKSHEET_NAME` with these columns:
 

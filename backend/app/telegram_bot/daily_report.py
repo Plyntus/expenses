@@ -118,17 +118,35 @@ async def send_daily_report(
     budget_worksheet_name: str,
     report_date: date,
 ) -> None:
-    await sync_google_sheets_before_daily_report(
+    problems: list[str] = []
+    sync_problem = await sync_google_sheets_before_daily_report(
         session_factory=session_factory,
         sheets_client=sheets_client,
     )
+    if sync_problem:
+        problems.append(sync_problem)
 
-    budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
-    budget_categories = parse_budget_sheet(budget_values)
+    try:
+        budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
+        budget_categories = parse_budget_sheet(budget_values)
+    except Exception as exc:
+        logger.exception("Failed to read budget sheet before daily report")
+        budget_categories = []
+        problems.append(
+            "error: не удалось прочитать бюджет перед отчетом: "
+            f"{_short_error_message(exc)}. Категории выше не рассчитаны."
+        )
 
-    with session_factory() as db:
-        message = build_daily_report_message(db, report_date, budget_categories)
+    try:
+        with session_factory() as db:
+            message = build_daily_report_message(db, report_date, budget_categories)
+    except Exception as exc:
+        logger.exception("Failed to build daily Telegram report")
+        message = "Не удалось сформировать ежедневный отчет."
+        problems.append(f"error: {_short_error_message(exc)}")
 
+    if problems:
+        message = f"{message}\n\nПроблемы:\n" + "\n".join(problems)
     await bot.send_message(chat_id=chat_id, text=message)
 
 
@@ -136,18 +154,27 @@ async def sync_google_sheets_before_daily_report(
     *,
     session_factory: sessionmaker[Session],
     sheets_client: GoogleSheetsClient,
-) -> None:
-    with session_factory() as db:
-        sync_run = await sync_google_sheets_to_postgres(
-            db,
-            sheets_client,
-            triggered_by="telegram_daily_report",
+) -> str | None:
+    try:
+        with session_factory() as db:
+            sync_run = await sync_google_sheets_to_postgres(
+                db,
+                sheets_client,
+                triggered_by="telegram_daily_report",
+            )
+    except Exception as exc:
+        logger.exception("Google Sheets sync before daily report crashed")
+        return (
+            "error: не удалось обновить расходы из Google Sheets перед отчетом: "
+            f"{_short_error_message(exc)}. Отчет выше построен по данным, "
+            "которые уже были в БД."
         )
 
     if sync_run.status not in REPORT_SYNC_OK_STATUSES:
-        raise RuntimeError(
-            "Google Sheets sync before daily report failed: "
-            f"{sync_run.error_message or sync_run.status}"
+        return (
+            "error: не удалось обновить расходы из Google Sheets перед отчетом: "
+            f"{_short_error_message(sync_run.error_message or sync_run.status)}. "
+            "Отчет выше построен по данным, которые уже были в БД."
         )
     if sync_run.status != "success":
         logger.warning(
@@ -155,10 +182,23 @@ async def sync_google_sheets_before_daily_report(
             sync_run.status,
             sync_run.error_message,
         )
+        return (
+            "warning: Google Sheets обновились частично: "
+            f"{sync_run.rows_failed} строк не импортировано. "
+            "Отчет выше построен по успешно импортированным строкам."
+        )
     logger.info(
         "Google Sheets sync before daily report imported %s rows",
         sync_run.rows_imported,
     )
+    return None
+
+
+def _short_error_message(error: object, max_length: int = 240) -> str:
+    text = str(error).strip().splitlines()[0] if str(error).strip() else "unknown error"
+    if len(text) <= max_length:
+        return text
+    return f"{text[: max_length - 1]}..."
 
 
 def build_daily_report_message(

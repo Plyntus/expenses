@@ -2,12 +2,16 @@ from __future__ import annotations
 
 import logging
 import tempfile
+from contextlib import suppress
+from datetime import date, datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import pandas as pd
 from aiogram import Bot, F, Router
 from aiogram.filters import Command, CommandStart
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import settings
 from app.llm.expense_parser import (
@@ -16,12 +20,25 @@ from app.llm.expense_parser import (
     parse_rows,
     rows_to_dataframe,
 )
+from app.sheets.client import GoogleSheetsClient
+from app.telegram_bot.daily_report import send_daily_report
 from app.telegram_bot.sheets_writer import SheetsWriter
 
 router = Router()
 pending_tables: dict[int, pd.DataFrame] = {}
 expense_parser: ExpenseParser
+sheets_client: GoogleSheetsClient
 sheets_writer: SheetsWriter
+session_factory: sessionmaker[Session]
+
+HELP_TEXT = "\n".join(
+    [
+        "Доступные команды:",
+        "/help - показать это сообщение",
+        "/last5 - пять последних трат",
+        "/report - отправить отчет за текущий месяц",
+    ]
+)
 
 
 @router.message(CommandStart())
@@ -29,11 +46,16 @@ async def start(message: Message) -> None:
     text = (
         "Отправь голосовое или текст. Я распознаю расход, покажу таблицу "
         "и после подтверждения допишу ее в Google Sheets.\n\n"
-        "Команды: /last5 - пять последних трат."
+        f"{HELP_TEXT}"
     )
     if not settings.telegram_daily_report_chat_id:
         text += f"\n\nID этого чата для ежедневного отчета: {message.chat.id}"
     await message.answer(text)
+
+
+@router.message(Command("help"))
+async def help_command(message: Message) -> None:
+    await message.answer(HELP_TEXT)
 
 
 @router.message(Command("last5"))
@@ -54,6 +76,25 @@ async def last5(message: Message) -> None:
         for expense in expenses
     ]
     await message.answer("\n".join(lines))
+
+
+@router.message(Command("report"))
+async def report(message: Message, bot: Bot) -> None:
+    status = await message.answer("Формирую отчет...")
+    try:
+        await send_daily_report(
+            bot=bot,
+            chat_id=message.chat.id,
+            sheets_client=sheets_client,
+            session_factory=session_factory,
+            budget_worksheet_name=settings.google_budget_worksheet_name,
+            report_date=_today_for_report_timezone(),
+        )
+        with suppress(Exception):
+            await status.delete()
+    except Exception as exc:
+        logging.exception("Failed to send requested Telegram report")
+        await status.edit_text(f"Не получилось отправить отчет: {exc}")
 
 
 @router.message(F.voice)
@@ -137,3 +178,15 @@ async def cancel_append(callback: CallbackQuery) -> None:
     if callback.message:
         await callback.message.edit_text("Ок, не дописываю.")
     await callback.answer()
+
+
+def _today_for_report_timezone() -> date:
+    try:
+        timezone = ZoneInfo(settings.telegram_daily_report_timezone)
+    except ZoneInfoNotFoundError:
+        logging.exception(
+            "Invalid TELEGRAM_DAILY_REPORT_TIMEZONE=%s; using local date",
+            settings.telegram_daily_report_timezone,
+        )
+        return datetime.now().date()
+    return datetime.now(timezone).date()
