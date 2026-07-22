@@ -37,6 +37,7 @@ HELP_TEXT = "\n".join(
         "/help - показать это сообщение",
         "/last5 - пять последних трат",
         "/report - отправить отчет за текущий месяц",
+        "/filter - показать категории, исключенные из отчета",
     ]
 )
 
@@ -78,6 +79,17 @@ async def last5(message: Message) -> None:
     await message.answer("\n".join(lines))
 
 
+@router.message(Command("filter"))
+async def report_filter(message: Message) -> None:
+    categories = settings.telegram_report_excluded_categories
+    if not categories:
+        await message.answer("В отчете учитываются все категории.")
+        return
+    lines = ["Категории, исключенные из отчета:"]
+    lines.extend(f"- {category}" for category in categories)
+    await message.answer("\n".join(lines))
+
+
 @router.message(Command("report"))
 async def report(message: Message, bot: Bot) -> None:
     status = await message.answer("Формирую отчет...")
@@ -89,6 +101,7 @@ async def report(message: Message, bot: Bot) -> None:
             session_factory=session_factory,
             budget_worksheet_name=settings.google_budget_worksheet_name,
             report_date=_today_for_report_timezone(),
+            excluded_categories=settings.telegram_report_excluded_categories,
         )
         with suppress(Exception):
             await status.delete()

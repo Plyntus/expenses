@@ -178,6 +178,7 @@ Available commands:
 - `/help` - show available commands
 - `/last5` - show five latest expenses from Google Sheets
 - `/report` - send the current monthly report on demand
+- `/filter` - show categories excluded from Telegram reports
 
 If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`.
 The report reads budget rows from `GOOGLE_BUDGET_WORKSHEET_NAME` with these columns:
@@ -186,7 +187,9 @@ The report reads budget rows from `GOOGLE_BUDGET_WORKSHEET_NAME` with these colu
 - `Budget`
 - `Currency`
 
-The daily report focuses on current calendar-month EUR spending:
+The daily report focuses on current calendar-month EUR spending. Expenses in every
+currency are included and converted using one current exchange-rate snapshot loaded
+when the report is generated:
 
 ```text
 За текущий месяц потрачено [sum] EUR. Последняя дата: [date of last transaction].
@@ -195,7 +198,11 @@ The daily report focuses on current calendar-month EUR spending:
 [Category]: [sum of spend] ([% from budget])
 ```
 
-Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed in the budget sheet for the same currency, so all matching expenses are distributed across budget categories.
+Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed explicitly in the budget sheet, with amounts converted to the budget currency.
+
+Categories excluded from Telegram reports are configured directly in
+`TELEGRAM_REPORT_EXCLUDED_CATEGORIES` in `backend/app/core/config.py`. The default
+list contains `Переводы`; `/filter` displays the active list but does not modify it.
 
 If the chat id is not configured yet, send `/start` to the bot and use the chat id shown in the reply.
 

@@ -47,6 +47,7 @@ async def main() -> None:
                 session_factory=SessionLocal,
                 timezone_name=settings.telegram_daily_report_timezone,
                 budget_worksheet_name=settings.google_budget_worksheet_name,
+                excluded_categories=settings.telegram_report_excluded_categories,
             )
         )
     else:

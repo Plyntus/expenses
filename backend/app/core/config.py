@@ -8,6 +8,11 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 
+# Code-level configuration for categories that Telegram reports must ignore.
+# Edit this tuple directly when the list needs to change.
+TELEGRAM_REPORT_EXCLUDED_CATEGORIES = ("Переводы",)
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -20,6 +25,7 @@ class Settings:
     telegram_bot_token: str | None
     telegram_daily_report_chat_id: int | None
     telegram_daily_report_timezone: str
+    telegram_report_excluded_categories: tuple[str, ...]
     openai_api_key: str | None
     openai_transcribe_model: str
     openai_text_model: str
@@ -60,6 +66,7 @@ def load_settings() -> Settings:
         ),
         telegram_daily_report_timezone=os.getenv("TELEGRAM_DAILY_REPORT_TIMEZONE")
         or "CET",
+        telegram_report_excluded_categories=TELEGRAM_REPORT_EXCLUDED_CATEGORIES,
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_transcribe_model=os.getenv(
             "OPENAI_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe"

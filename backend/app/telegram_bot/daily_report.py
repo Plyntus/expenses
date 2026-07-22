@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime, time, timedelta
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Sequence
+from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from aiogram import Bot
-from sqlalchemy import desc, func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db.models import Expense
@@ -20,6 +23,8 @@ logger = logging.getLogger(__name__)
 
 REPORT_TIME = time(hour=22, minute=0)
 REPORT_CURRENCY = "EUR"
+EXCHANGE_RATE_API_URL = "https://open.er-api.com/v6/latest/EUR"
+EXCHANGE_RATE_TIMEOUT_SECONDS = 10
 OTHER_CATEGORY_KEY = "остальное"
 REPORT_SYNC_OK_STATUSES = {"success", "partial_success"}
 MONTH_NAMES_RU = {
@@ -55,6 +60,32 @@ class BudgetCategorySpend:
     currency: str
 
 
+@dataclass(frozen=True)
+class ExchangeRates:
+    base_currency: str
+    rates: dict[str, Decimal]
+    updated_at: str | int | None = None
+
+    def convert(
+        self, value: Decimal, source_currency: str, target_currency: str
+    ) -> Decimal:
+        source = _currency_key(source_currency)
+        target = _currency_key(target_currency)
+        if not source:
+            raise ValueError("У транзакции не указана валюта")
+        if not target:
+            raise ValueError("Не указана валюта назначения")
+        if source == target:
+            return value
+
+        source_rate = self.rates.get(source)
+        target_rate = self.rates.get(target)
+        if not source_rate or not target_rate:
+            missing = source if not source_rate else target
+            raise ValueError(f"Нет курса для валюты {missing}")
+        return value / source_rate * target_rate
+
+
 async def run_daily_report_scheduler(
     *,
     bot: Bot,
@@ -63,6 +94,7 @@ async def run_daily_report_scheduler(
     session_factory: sessionmaker[Session],
     timezone_name: str,
     budget_worksheet_name: str,
+    excluded_categories: Sequence[str],
 ) -> None:
     try:
         timezone = ZoneInfo(timezone_name)
@@ -90,6 +122,7 @@ async def run_daily_report_scheduler(
                 session_factory=session_factory,
                 budget_worksheet_name=budget_worksheet_name,
                 report_date=datetime.now(timezone).date(),
+                excluded_categories=excluded_categories,
             )
         except asyncio.CancelledError:
             raise
@@ -117,6 +150,7 @@ async def send_daily_report(
     session_factory: sessionmaker[Session],
     budget_worksheet_name: str,
     report_date: date,
+    excluded_categories: Sequence[str],
 ) -> None:
     problems: list[str] = []
     sync_problem = await sync_google_sheets_before_daily_report(
@@ -125,6 +159,16 @@ async def send_daily_report(
     )
     if sync_problem:
         problems.append(sync_problem)
+
+    exchange_rates: ExchangeRates | None = None
+    try:
+        exchange_rates = await load_exchange_rates()
+    except Exception as exc:
+        logger.exception("Failed to load exchange rates before daily report")
+        problems.append(
+            "error: не удалось загрузить курсы валют перед отчетом: "
+            f"{_short_error_message(exc)}."
+        )
 
     try:
         budget_values = await sheets_client.get_worksheet_values(budget_worksheet_name)
@@ -137,17 +181,61 @@ async def send_daily_report(
             f"{_short_error_message(exc)}. Категории выше не рассчитаны."
         )
 
-    try:
-        with session_factory() as db:
-            message = build_daily_report_message(db, report_date, budget_categories)
-    except Exception as exc:
-        logger.exception("Failed to build daily Telegram report")
+    if exchange_rates is None:
         message = "Не удалось сформировать ежедневный отчет."
-        problems.append(f"error: {_short_error_message(exc)}")
+    else:
+        try:
+            with session_factory() as db:
+                message = build_daily_report_message(
+                    db,
+                    report_date,
+                    budget_categories,
+                    exchange_rates,
+                    excluded_categories,
+                )
+        except Exception as exc:
+            logger.exception("Failed to build daily Telegram report")
+            message = "Не удалось сформировать ежедневный отчет."
+            problems.append(f"error: {_short_error_message(exc)}")
 
     if problems:
         message = f"{message}\n\nПроблемы:\n" + "\n".join(problems)
     await bot.send_message(chat_id=chat_id, text=message)
+
+
+async def load_exchange_rates() -> ExchangeRates:
+    return await asyncio.to_thread(_load_exchange_rates_sync)
+
+
+def _load_exchange_rates_sync() -> ExchangeRates:
+    request = Request(
+        EXCHANGE_RATE_API_URL,
+        headers={"User-Agent": "expense-tracker-telegram-bot/1.0"},
+    )
+    with urlopen(request, timeout=EXCHANGE_RATE_TIMEOUT_SECONDS) as response:
+        payload = json.load(response)
+
+    if payload.get("result") == "error" or not isinstance(
+        payload.get("rates"), dict
+    ):
+        raise ValueError("API курсов валют вернул неожиданный ответ")
+
+    base_currency = _currency_key(payload.get("base_code") or REPORT_CURRENCY)
+    if base_currency != REPORT_CURRENCY:
+        raise ValueError(
+            f"API курсов валют вернул базовую валюту {base_currency}, ожидалась EUR"
+        )
+    rates: dict[str, Decimal] = {base_currency: Decimal("1")}
+    for currency, raw_rate in payload["rates"].items():
+        rate = _decimal(raw_rate)
+        if rate > 0:
+            rates[_currency_key(currency)] = rate
+    return ExchangeRates(
+        base_currency=base_currency,
+        rates=rates,
+        updated_at=payload.get("time_last_update_utc")
+        or payload.get("time_last_update_unix"),
+    )
 
 
 async def sync_google_sheets_before_daily_report(
@@ -202,26 +290,31 @@ def _short_error_message(error: object, max_length: int = 240) -> str:
 
 
 def build_daily_report_message(
-    db: Session, report_date: date, budget_categories: list[BudgetCategory]
+    db: Session,
+    report_date: date,
+    budget_categories: list[BudgetCategory],
+    exchange_rates: ExchangeRates,
+    excluded_categories: Sequence[str],
 ) -> str:
     month_start = report_date.replace(day=1)
-    monthly_spending = _spending_total(
+    spending, latest_date = _monthly_spending(
         db,
         date_from=month_start,
         date_to=report_date,
-        currency=REPORT_CURRENCY,
+        excluded_categories=excluded_categories,
     )
-    latest_date = _latest_transaction_date(
-        db,
-        date_from=month_start,
-        date_to=report_date,
-        currency=REPORT_CURRENCY,
+    monthly_spending = sum(
+        (
+            exchange_rates.convert(total, source_currency, REPORT_CURRENCY)
+            for (source_currency, _), total in spending.items()
+        ),
+        Decimal("0"),
     )
     category_spending = _budget_category_spending(
-        db,
+        spending,
         budget_categories=budget_categories,
-        date_from=month_start,
-        date_to=report_date,
+        exchange_rates=exchange_rates,
+        excluded_categories=excluded_categories,
     )
 
     return "\n".join(
@@ -278,30 +371,20 @@ def parse_budget_sheet(values: list[list[str]]) -> list[BudgetCategory]:
     return categories
 
 
-def _spending_total(
-    db: Session, *, date_from: date, date_to: date, currency: str
-) -> Decimal:
-    value = db.scalar(
-        select(func.coalesce(func.sum(func.abs(Expense.amount)), 0)).where(
-            *_expense_filters(date_from=date_from, date_to=date_to, currency=currency)
-        )
-    )
-    return _decimal(value)
-
-
 def _budget_category_spending(
-    db: Session,
+    spending: dict[tuple[str, str], Decimal],
     *,
     budget_categories: list[BudgetCategory],
-    date_from: date,
-    date_to: date,
+    exchange_rates: ExchangeRates,
+    excluded_categories: Sequence[str],
 ) -> list[BudgetCategorySpend]:
-    spending = _spending_by_category_and_currency(
-        db, date_from=date_from, date_to=date_to
-    )
+    excluded_keys = {_category_key(category) for category in excluded_categories}
     explicit_categories_by_currency: dict[str, set[str]] = {}
     for item in budget_categories:
-        if item.category_key == OTHER_CATEGORY_KEY:
+        if (
+            item.category_key == OTHER_CATEGORY_KEY
+            or item.category_key in excluded_keys
+        ):
             continue
         explicit_categories_by_currency.setdefault(item.currency_key, set()).add(
             item.category_key
@@ -309,15 +392,27 @@ def _budget_category_spending(
 
     report_items: list[BudgetCategorySpend] = []
     for item in budget_categories:
+        if item.category_key in excluded_keys:
+            continue
         if item.category_key == OTHER_CATEGORY_KEY:
             explicit_keys = explicit_categories_by_currency.get(item.currency_key, set())
             spent = sum(
-                total
-                for (currency_key, category_key), total in spending.items()
-                if currency_key == item.currency_key and category_key not in explicit_keys
+                (
+                    exchange_rates.convert(total, source_currency, item.currency_key)
+                    for (source_currency, category_key), total in spending.items()
+                    if category_key not in explicit_keys
+                ),
+                Decimal("0"),
             )
         else:
-            spent = spending.get((item.currency_key, item.category_key), Decimal("0"))
+            spent = sum(
+                (
+                    exchange_rates.convert(total, source_currency, item.currency_key)
+                    for (source_currency, category_key), total in spending.items()
+                    if category_key == item.category_key
+                ),
+                Decimal("0"),
+            )
 
         report_items.append(
             BudgetCategorySpend(
@@ -330,43 +425,33 @@ def _budget_category_spending(
     return report_items
 
 
-def _spending_by_category_and_currency(
-    db: Session, *, date_from: date, date_to: date
-) -> dict[tuple[str, str], Decimal]:
-    total = func.sum(func.abs(Expense.amount)).label("total")
+def _monthly_spending(
+    db: Session,
+    *,
+    date_from: date,
+    date_to: date,
+    excluded_categories: Sequence[str],
+) -> tuple[dict[tuple[str, str], Decimal], date | None]:
     rows = db.execute(
-        select(Expense.currency, Expense.category, total)
+        select(Expense.currency, Expense.category, Expense.amount, Expense.date)
         .where(
             Expense.amount < 0,
             Expense.date >= date_from,
             Expense.date <= date_to,
         )
-        .group_by(Expense.currency, Expense.category)
     ).all()
-    return {
-        (_currency_key(row[0]), _category_key(row[1])): _decimal(row[2])
-        for row in rows
-    }
-
-
-def _latest_transaction_date(
-    db: Session, *, date_from: date, date_to: date, currency: str
-) -> date | None:
-    return db.scalar(
-        select(Expense.date)
-        .where(*_expense_filters(date_from=date_from, date_to=date_to, currency=currency))
-        .order_by(desc(Expense.date), desc(Expense.id))
-        .limit(1)
-    )
-
-
-def _expense_filters(*, date_from: date, date_to: date, currency: str):
-    return (
-        Expense.amount < 0,
-        Expense.date >= date_from,
-        Expense.date <= date_to,
-        func.upper(func.coalesce(Expense.currency, "")) == _currency_key(currency),
-    )
+    excluded_keys = {_category_key(category) for category in excluded_categories}
+    spending: dict[tuple[str, str], Decimal] = {}
+    latest_date: date | None = None
+    for currency, category, amount, transaction_date in rows:
+        category_key = _category_key(category)
+        if category_key in excluded_keys:
+            continue
+        key = (_currency_key(currency), category_key)
+        spending[key] = spending.get(key, Decimal("0")) + abs(_decimal(amount))
+        if latest_date is None or transaction_date > latest_date:
+            latest_date = transaction_date
+    return spending, latest_date
 
 
 def _format_budget_category_spending(
