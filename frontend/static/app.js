@@ -44,6 +44,7 @@ let dashboardState = {
   collapsedCategories: new Set(),
   convertToEur: false,
   exchangeRates: null,
+  exchangeRatesPromise: null,
   exchangeRateError: null,
 };
 let resizeTimer = null;
@@ -63,6 +64,10 @@ async function api(path, options = {}) {
 function normalizeText(value, fallback = "") {
   const text = value == null ? "" : String(value).trim();
   return text || fallback;
+}
+
+function normalizeCurrency(value) {
+  return normalizeText(value).toUpperCase();
 }
 
 function rawField(expense, key, fallback = "") {
@@ -91,7 +96,7 @@ function signedAmount(expense) {
 }
 
 function currencySymbol(currency) {
-  const code = normalizeText(currency).toUpperCase();
+  const code = normalizeCurrency(currency);
   if (code === "EUR") return "€";
   if (code === "USD") return "$";
   if (code === "GBP") return "£";
@@ -130,6 +135,21 @@ function formatDate(value) {
 function formatDateTime(value) {
   if (!value) return "-";
   return new Date(value).toLocaleString("ru-RU");
+}
+
+function formatDateInputValue(value) {
+  const year = value.getFullYear();
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function currentMonthDateRange() {
+  const today = new Date();
+  return {
+    dateFrom: formatDateInputValue(new Date(today.getFullYear(), today.getMonth(), 1)),
+    dateTo: formatDateInputValue(today),
+  };
 }
 
 function getMultiSelectedValues(id) {
@@ -271,7 +291,6 @@ function getFilters() {
     dateTo: document.getElementById("dateTo").value,
     accounts: getMultiSelectedValues("accountFilter"),
     excludedCategories: getMultiSelectedValues("excludedCategoryFilter"),
-    currency: document.getElementById("currencyFilter").value,
     minCategoryTotal: Math.max(0, Number(document.getElementById("minCategoryTotal").value || 0)),
   };
 }
@@ -284,13 +303,11 @@ function filterExpenses(expenses) {
   return expenses.filter((expense) => {
     const category = normalizeText(expense.category, FALLBACK_CATEGORY);
     const account = normalizeText(expense.payment_method);
-    const currency = normalizeText(expense.currency);
 
     if (filters.dateFrom && expense.date < filters.dateFrom) return false;
     if (filters.dateTo && expense.date > filters.dateTo) return false;
     if (accountSet.size && !accountSet.has(account)) return false;
     if (excludedCategorySet.has(category)) return false;
-    if (filters.currency && currency !== filters.currency) return false;
     return true;
   });
 }
@@ -324,29 +341,72 @@ function filterMovements(movements) {
 
 async function ensureExchangeRates() {
   if (dashboardState.exchangeRates) return dashboardState.exchangeRates;
-  const response = await fetch(EUR_RATE_API_URL);
-  if (!response.ok) {
-    throw new Error(`Не удалось загрузить курсы валют: ${response.status}`);
+  if (dashboardState.exchangeRatesPromise) return dashboardState.exchangeRatesPromise;
+
+  dashboardState.exchangeRatesPromise = (async () => {
+    const response = await fetch(EUR_RATE_API_URL);
+    if (!response.ok) {
+      throw new Error(`Не удалось загрузить курсы валют: ${response.status}`);
+    }
+    const payload = await response.json();
+    if (!payload?.rates || payload.result === "error") {
+      throw new Error("API курсов валют вернул неожиданный ответ");
+    }
+    dashboardState.exchangeRates = {
+      base: "EUR",
+      rates: { EUR: 1, ...payload.rates },
+      updated: payload.time_last_update_utc || payload.time_last_update_unix || null,
+    };
+    dashboardState.exchangeRateError = null;
+    return dashboardState.exchangeRates;
+  })();
+
+  try {
+    return await dashboardState.exchangeRatesPromise;
+  } finally {
+    dashboardState.exchangeRatesPromise = null;
   }
-  const payload = await response.json();
-  if (!payload?.rates || payload.result === "error") {
-    throw new Error("API курсов валют вернул неожиданный ответ");
-  }
-  dashboardState.exchangeRates = {
-    base: "EUR",
-    rates: { EUR: 1, ...payload.rates },
-    updated: payload.time_last_update_utc || payload.time_last_update_unix || null,
-  };
-  dashboardState.exchangeRateError = null;
-  return dashboardState.exchangeRates;
 }
 
 function convertAmountToEur(value, currency) {
-  const code = normalizeText(currency).toUpperCase();
+  const code = normalizeCurrency(currency);
   if (!code || code === "EUR") return Number(value || 0);
   const rate = dashboardState.exchangeRates?.rates?.[code];
   if (!rate) return null;
   return Number(value || 0) / Number(rate);
+}
+
+function convertAmount(value, sourceCurrency, targetCurrency) {
+  const source = normalizeCurrency(sourceCurrency);
+  const target = normalizeCurrency(targetCurrency);
+  if (!source || !target) return null;
+  if (source === target) return Number(value || 0);
+
+  const sourceRate = dashboardState.exchangeRates?.rates?.[source];
+  const targetRate = dashboardState.exchangeRates?.rates?.[target];
+  if (!sourceRate || !targetRate) return null;
+  return (Number(value || 0) / Number(sourceRate)) * Number(targetRate);
+}
+
+function expenseAmountInCurrency(expense, targetCurrency) {
+  return convertAmount(expenseAmount(expense), expense.currency, targetCurrency);
+}
+
+function missingRateCurrencies(expenses, targetCurrency) {
+  const target = normalizeCurrency(targetCurrency);
+  const missing = new Set();
+  for (const expense of expenses) {
+    if (!expenseAmount(expense)) continue;
+    const source = normalizeCurrency(expense.currency);
+    if (!source) {
+      missing.add("валюта не указана");
+      continue;
+    }
+    if (source !== target && expenseAmountInCurrency(expense, target) == null) {
+      missing.add(source);
+    }
+  }
+  return [...missing].sort();
 }
 
 function balanceDisplayAmount(value, currency) {
@@ -388,18 +448,29 @@ function buildAccountBalances(movements) {
   );
 }
 
-function summarizeExpenses(expenses) {
+function summarizeExpenses(expenses, targetCurrency) {
+  let total = 0;
+  let convertedCount = 0;
+  for (const expense of expenses) {
+    const amount = expenseAmountInCurrency(expense, targetCurrency);
+    if (amount == null) continue;
+    total += amount;
+    convertedCount += 1;
+  }
   return {
-    total: expenses.reduce((sum, expense) => sum + expenseAmount(expense), 0),
+    total,
     count: expenses.length,
+    complete: convertedCount === expenses.length,
   };
 }
 
-function buildCategoryTotals(expenses) {
+function buildCategoryTotals(expenses, targetCurrency) {
   const totals = new Map();
   for (const expense of expenses) {
+    const amount = expenseAmountInCurrency(expense, targetCurrency);
+    if (amount == null) continue;
     const category = normalizeText(expense.category, FALLBACK_CATEGORY);
-    totals.set(category, (totals.get(category) || 0) + expenseAmount(expense));
+    totals.set(category, (totals.get(category) || 0) + amount);
   }
   return totals;
 }
@@ -408,8 +479,8 @@ function collapseCategory(category, collapsedCategories) {
   return collapsedCategories.has(category) ? OTHER_CATEGORY : category;
 }
 
-function aggregateForChart(expenses, minCategoryTotal) {
-  const categoryTotals = buildCategoryTotals(expenses);
+function aggregateForChart(expenses, minCategoryTotal, targetCurrency) {
+  const categoryTotals = buildCategoryTotals(expenses, targetCurrency);
   const collapsedCategories = new Set(
     [...categoryTotals.entries()]
       .filter(([, total]) => minCategoryTotal > 0 && total < minCategoryTotal)
@@ -425,7 +496,8 @@ function aggregateForChart(expenses, minCategoryTotal) {
       grouped.set(category, { category, total: 0, subcategories: new Map() });
     }
     const categoryGroup = grouped.get(category);
-    const amount = expenseAmount(expense);
+    const amount = expenseAmountInCurrency(expense, targetCurrency);
+    if (amount == null) continue;
     categoryGroup.total += amount;
     categoryGroup.subcategories.set(
       subcategory,
@@ -441,12 +513,51 @@ function aggregateForChart(expenses, minCategoryTotal) {
   return { categories, subcategories, collapsedCategories };
 }
 
-function getPrimaryCurrency(expenses) {
-  return (
-    document.getElementById("currencyFilter").value ||
-    expenses.find((expense) => expense.currency)?.currency ||
-    ""
+function getDisplayCurrency() {
+  return normalizeCurrency(document.getElementById("currencyFilter").value);
+}
+
+function expenseConversionStatus(expenses, targetCurrency) {
+  const missing = missingRateCurrencies(expenses, targetCurrency);
+  if (!missing.length) return { ready: true, message: "" };
+  if (dashboardState.exchangeRateError) {
+    return { ready: false, message: dashboardState.exchangeRateError };
+  }
+  if (!dashboardState.exchangeRates) {
+    return { ready: false, message: "Загрузка курсов валют..." };
+  }
+  return { ready: false, message: `Нет курса для: ${missing.join(", ")}` };
+}
+
+function renderExpenseRateMeta(filteredExpenses) {
+  const meta = document.getElementById("expenseRateMeta");
+  const targetCurrency = getDisplayCurrency();
+  const status = expenseConversionStatus(filteredExpenses, targetCurrency);
+  const sourceCurrencies = new Set(
+    filteredExpenses.map((expense) => normalizeCurrency(expense.currency)).filter(Boolean),
   );
+  const needsConversion =
+    !status.ready || [...sourceCurrencies].some((currency) => currency !== targetCurrency);
+  if (!needsConversion) {
+    meta.hidden = true;
+    meta.textContent = "";
+    meta.classList.remove("is-error");
+    return;
+  }
+
+  meta.hidden = false;
+  meta.classList.toggle(
+    "is-error",
+    !status.ready && Boolean(dashboardState.exchangeRateError || dashboardState.exchangeRates),
+  );
+  if (!status.ready) {
+    meta.textContent = status.message;
+    return;
+  }
+  const updated = dashboardState.exchangeRates?.updated
+    ? ` · обновлено: ${dashboardState.exchangeRates.updated}`
+    : "";
+  meta.textContent = `Все суммы пересчитаны в ${targetCurrency} по курсам open.er-api.com${updated}`;
 }
 
 function renderSummary(filteredExpenses) {
@@ -455,11 +566,14 @@ function renderSummary(filteredExpenses) {
     dashboardState.activeView !== "expenses",
   );
 
-  const currency = getPrimaryCurrency(filteredExpenses);
-  const overall = summarizeExpenses(filteredExpenses);
+  const currency = getDisplayCurrency();
+  const overall = summarizeExpenses(filteredExpenses, currency);
 
   document.getElementById("overallSummary").textContent =
-    `Всего: ${formatMoney(overall.total, currency)} · ${overall.count} транзакций`;
+    `Всего: ${overall.complete ? formatMoney(overall.total, currency) : "—"} · ${overall.count} транзакций`;
+  document.getElementById("minCategoryTotalLabel").textContent =
+    `Мин. сумма категории, ${currency}`;
+  renderExpenseRateMeta(filteredExpenses);
 
   const lastSync = dashboardState.lastSync;
   const importedRows = lastSync?.rows_imported ?? "-";
@@ -488,14 +602,15 @@ function colorForSubcategory(subcategory, index) {
 
 function renderChart(filteredExpenses) {
   const filters = getFilters();
-  const currency = getPrimaryCurrency(filteredExpenses);
+  const currency = getDisplayCurrency();
   const chartElement = document.getElementById("categoryChart");
   const chartWidth = chartElement.clientWidth || window.innerWidth;
   const compactChart = chartWidth < 1180;
-  const { categories, subcategories, collapsedCategories } = aggregateForChart(
-    filteredExpenses,
-    filters.minCategoryTotal,
-  );
+  const conversionStatus = expenseConversionStatus(filteredExpenses, currency);
+  const aggregated = conversionStatus.ready
+    ? aggregateForChart(filteredExpenses, filters.minCategoryTotal, currency)
+    : { categories: [], subcategories: [], collapsedCategories: new Set() };
+  const { categories, subcategories, collapsedCategories } = aggregated;
   dashboardState.collapsedCategories = collapsedCategories;
 
   if (dashboardState.selectedCategory) {
@@ -544,7 +659,9 @@ function renderChart(filteredExpenses) {
     ? valueAnnotations
     : [
         {
-          text: "Нет транзакций для выбранных фильтров",
+          text: conversionStatus.ready
+            ? "Нет транзакций для выбранных фильтров"
+            : conversionStatus.message,
           x: 0.5,
           y: 0.5,
           xref: "paper",
@@ -568,7 +685,7 @@ function renderChart(filteredExpenses) {
         b: compactChart ? 58 : 42,
       },
       xaxis: {
-        title: "Сумма",
+        title: `Сумма, ${currency}`,
         gridcolor: "#dfe8f6",
         zeroline: true,
         zerolinecolor: "#d9e2f1",
@@ -783,7 +900,10 @@ function renderFilterOptions() {
     ...new Set(expenses.map((expense) => normalizeText(expense.category, FALLBACK_CATEGORY))),
   ].sort((left, right) => left.localeCompare(right, "ru"));
   const currencies = [
-    ...new Set(expenses.map((expense) => normalizeText(expense.currency)).filter(Boolean)),
+    ...new Set([
+      "EUR",
+      ...expenses.map((expense) => normalizeCurrency(expense.currency)).filter(Boolean),
+    ]),
   ].sort();
 
   setMultiSelectOptions("accountFilter", accounts, getMultiSelectedValues("accountFilter"));
@@ -809,16 +929,21 @@ function renderFilterOptions() {
       : currencies[0] || "";
 
   const dates = expenses.map((expense) => expense.date).filter(Boolean).sort();
-  if (dates.length) {
-    const dateFrom = document.getElementById("dateFrom");
-    const dateTo = document.getElementById("dateTo");
-    dateFrom.min = dates[0];
-    dateFrom.max = dates[dates.length - 1];
-    dateTo.min = dates[0];
-    dateTo.max = dates[dates.length - 1];
-    if (!dateFrom.value) dateFrom.value = dates[0];
-    if (!dateTo.value) dateTo.value = dates[dates.length - 1];
-  }
+  const dateFrom = document.getElementById("dateFrom");
+  const dateTo = document.getElementById("dateTo");
+  const currentRange = currentMonthDateRange();
+  const earliestAllowed = dates.length
+    ? [dates[0], currentRange.dateFrom].sort()[0]
+    : currentRange.dateFrom;
+  const latestAllowed = dates.length
+    ? [dates[dates.length - 1], currentRange.dateTo].sort().at(-1)
+    : currentRange.dateTo;
+  dateFrom.min = earliestAllowed;
+  dateFrom.max = latestAllowed;
+  dateTo.min = earliestAllowed;
+  dateTo.max = latestAllowed;
+  if (!dateFrom.value) dateFrom.value = currentRange.dateFrom;
+  if (!dateTo.value) dateTo.value = currentRange.dateTo;
 }
 
 function renderBalanceFilterOptions() {
@@ -883,6 +1008,14 @@ async function loadDashboard() {
   };
   renderFilterOptions();
   renderBalanceFilterOptions();
+  renderDashboard();
+
+  dashboardState.exchangeRateError = null;
+  try {
+    await ensureExchangeRates();
+  } catch (error) {
+    dashboardState.exchangeRateError = error.message;
+  }
   renderDashboard();
 }
 
@@ -963,12 +1096,26 @@ async function handleConvertToEurChange(event) {
   renderBalance();
 }
 
+async function handleDisplayCurrencyChange() {
+  dashboardState.exchangeRateError = null;
+  renderDashboard();
+
+  const filteredExpenses = filterExpenses(dashboardState.expenses);
+  if (expenseConversionStatus(filteredExpenses, getDisplayCurrency()).ready) return;
+
+  try {
+    await ensureExchangeRates();
+  } catch (error) {
+    dashboardState.exchangeRateError = error.message;
+  }
+  renderDashboard();
+}
+
 for (const id of [
   "dateFrom",
   "dateTo",
   "accountFilter",
   "excludedCategoryFilter",
-  "currencyFilter",
   "minCategoryTotal",
 ]) {
   document.getElementById(id).addEventListener("change", () => {
@@ -993,6 +1140,7 @@ document.getElementById("resetBalanceFilters").addEventListener("click", resetBa
 document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
 document.getElementById("balanceTab").addEventListener("click", () => setActiveView("balance"));
 document.getElementById("convertToEur").addEventListener("change", handleConvertToEurChange);
+document.getElementById("currencyFilter").addEventListener("change", handleDisplayCurrencyChange);
 document.addEventListener("click", (event) => {
   if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
 });

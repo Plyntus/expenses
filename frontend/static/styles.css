@@ -337,6 +337,16 @@ a:focus-visible,
   padding: 5px 6px;
 }
 
+.filter-meta {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.filter-meta.is-error {
+  color: var(--danger);
+}
+
 .toggle-filter {
   min-height: 48px;
   display: flex;
