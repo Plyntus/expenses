@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 # Code-level configuration for categories that Telegram reports must ignore.
 # Edit this tuple directly when the list needs to change.
-TELEGRAM_REPORT_EXCLUDED_CATEGORIES = ("Переводы",)
+TELEGRAM_REPORT_EXCLUDED_CATEGORIES = ("Перевод", "Переводы")
 
 
 @dataclass(frozen=True)

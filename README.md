@@ -178,6 +178,7 @@ Available commands:
 - `/help` - show available commands
 - `/last5` - show five latest expenses from Google Sheets
 - `/report` - send the current monthly report on demand
+- `/detailes` - show current-month spending for every actual expense category
 - `/filter` - show categories excluded from Telegram reports
 
 If `TELEGRAM_DAILY_REPORT_CHAT_ID` is set, the bot also sends a daily report at 22:00 in `TELEGRAM_DAILY_REPORT_TIMEZONE`.
@@ -202,7 +203,8 @@ Before sending the report, the bot syncs Google Sheets to Postgres and then calc
 
 Categories excluded from Telegram reports are configured directly in
 `TELEGRAM_REPORT_EXCLUDED_CATEGORIES` in `backend/app/core/config.py`. The default
-list contains `Переводы`; `/filter` displays the active list but does not modify it.
+list contains both transfer category forms, `Перевод` and `Переводы`; `/filter`
+displays the active list but does not modify it.
 
 If the chat id is not configured yet, send `/start` to the bot and use the chat id shown in the reply.
 

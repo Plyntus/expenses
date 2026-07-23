@@ -21,7 +21,7 @@ from app.llm.expense_parser import (
     rows_to_dataframe,
 )
 from app.sheets.client import GoogleSheetsClient
-from app.telegram_bot.daily_report import send_daily_report
+from app.telegram_bot.daily_report import send_category_details, send_daily_report
 from app.telegram_bot.sheets_writer import SheetsWriter
 
 router = Router()
@@ -37,6 +37,7 @@ HELP_TEXT = "\n".join(
         "/help - показать это сообщение",
         "/last5 - пять последних трат",
         "/report - отправить отчет за текущий месяц",
+        "/detailes - расходы по всем категориям за текущий месяц",
         "/filter - показать категории, исключенные из отчета",
     ]
 )
@@ -108,6 +109,25 @@ async def report(message: Message, bot: Bot) -> None:
     except Exception as exc:
         logging.exception("Failed to send requested Telegram report")
         await status.edit_text(f"Не получилось отправить отчет: {exc}")
+
+
+@router.message(Command("detailes"))
+async def category_details(message: Message, bot: Bot) -> None:
+    status = await message.answer("Формирую расходы по категориям...")
+    try:
+        await send_category_details(
+            bot=bot,
+            chat_id=message.chat.id,
+            sheets_client=sheets_client,
+            session_factory=session_factory,
+            report_date=_today_for_report_timezone(),
+            excluded_categories=settings.telegram_report_excluded_categories,
+        )
+        with suppress(Exception):
+            await status.delete()
+    except Exception as exc:
+        logging.exception("Failed to send requested category details")
+        await status.edit_text(f"Не получилось отправить расходы по категориям: {exc}")
 
 
 @router.message(F.voice)

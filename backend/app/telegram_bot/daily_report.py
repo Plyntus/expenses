@@ -203,6 +203,85 @@ async def send_daily_report(
     await bot.send_message(chat_id=chat_id, text=message)
 
 
+async def send_category_details(
+    *,
+    bot: Bot,
+    chat_id: int,
+    sheets_client: GoogleSheetsClient,
+    session_factory: sessionmaker[Session],
+    report_date: date,
+    excluded_categories: Sequence[str],
+) -> None:
+    problems: list[str] = []
+    sync_problem = await sync_google_sheets_before_daily_report(
+        session_factory=session_factory,
+        sheets_client=sheets_client,
+    )
+    if sync_problem:
+        problems.append(sync_problem)
+
+    exchange_rates: ExchangeRates | None = None
+    try:
+        exchange_rates = await load_exchange_rates()
+    except Exception as exc:
+        logger.exception("Failed to load exchange rates before category details")
+        problems.append(
+            "error: не удалось загрузить курсы валют перед отчетом: "
+            f"{_short_error_message(exc)}."
+        )
+
+    if exchange_rates is None:
+        message = "Не удалось сформировать расходы по категориям."
+    else:
+        try:
+            with session_factory() as db:
+                message = build_category_details_message(
+                    db,
+                    report_date,
+                    exchange_rates,
+                    excluded_categories,
+                )
+        except Exception as exc:
+            logger.exception("Failed to build Telegram category details")
+            message = "Не удалось сформировать расходы по категориям."
+            problems.append(f"error: {_short_error_message(exc)}")
+
+    if problems:
+        message = f"{message}\n\nПроблемы:\n" + "\n".join(problems)
+    for chunk in _split_telegram_message(message):
+        await bot.send_message(chat_id=chat_id, text=chunk)
+
+
+def _split_telegram_message(text: str, max_length: int = 3900) -> list[str]:
+    if len(text) <= max_length:
+        return [text]
+
+    chunks: list[str] = []
+    current_lines: list[str] = []
+    current_length = 0
+    for line in text.splitlines():
+        line_length = len(line) + (1 if current_lines else 0)
+        if current_lines and current_length + line_length > max_length:
+            chunks.append("\n".join(current_lines))
+            current_lines = []
+            current_length = 0
+        if len(line) > max_length:
+            if current_lines:
+                chunks.append("\n".join(current_lines))
+                current_lines = []
+                current_length = 0
+            chunks.extend(
+                line[index : index + max_length]
+                for index in range(0, len(line), max_length)
+            )
+            continue
+        current_lines.append(line)
+        current_length += len(line) + (1 if len(current_lines) > 1 else 0)
+    if current_lines:
+        chunks.append("\n".join(current_lines))
+    return chunks
+
+
 async def load_exchange_rates() -> ExchangeRates:
     return await asyncio.to_thread(_load_exchange_rates_sync)
 
@@ -297,7 +376,7 @@ def build_daily_report_message(
     excluded_categories: Sequence[str],
 ) -> str:
     month_start = report_date.replace(day=1)
-    spending, latest_date = _monthly_spending(
+    spending, _, latest_date = _monthly_spending(
         db,
         date_from=month_start,
         date_to=report_date,
@@ -328,6 +407,48 @@ def build_daily_report_message(
             *_format_budget_category_spending(category_spending),
         ]
     )
+
+
+def build_category_details_message(
+    db: Session,
+    report_date: date,
+    exchange_rates: ExchangeRates,
+    excluded_categories: Sequence[str],
+) -> str:
+    month_start = report_date.replace(day=1)
+    spending, category_names, _ = _monthly_spending(
+        db,
+        date_from=month_start,
+        date_to=report_date,
+        excluded_categories=excluded_categories,
+    )
+    totals: dict[str, Decimal] = {}
+    for (source_currency, category_key), amount in spending.items():
+        converted = exchange_rates.convert(
+            amount, source_currency, REPORT_CURRENCY
+        )
+        totals[category_key] = totals.get(category_key, Decimal("0")) + converted
+
+    if not totals:
+        return "За текущий месяц трат по категориям нет."
+
+    sorted_categories = sorted(
+        totals.items(),
+        key=lambda item: (-item[1], category_names[item[0]].casefold()),
+    )
+    lines = ["Расходы по всем категориям за текущий месяц:"]
+    lines.extend(
+        (
+            f"{category_names[category_key]}: {_format_amount(total)} "
+            f"{REPORT_CURRENCY}"
+        )
+        for category_key, total in sorted_categories
+    )
+    total_spending = sum(totals.values(), Decimal("0"))
+    lines.extend(
+        ["", f"Всего: {_format_amount(total_spending)} {REPORT_CURRENCY}"]
+    )
+    return "\n".join(lines)
 
 
 def parse_budget_sheet(values: list[list[str]]) -> list[BudgetCategory]:
@@ -431,7 +552,7 @@ def _monthly_spending(
     date_from: date,
     date_to: date,
     excluded_categories: Sequence[str],
-) -> tuple[dict[tuple[str, str], Decimal], date | None]:
+) -> tuple[dict[tuple[str, str], Decimal], dict[str, str], date | None]:
     rows = db.execute(
         select(Expense.currency, Expense.category, Expense.amount, Expense.date)
         .where(
@@ -442,16 +563,20 @@ def _monthly_spending(
     ).all()
     excluded_keys = {_category_key(category) for category in excluded_categories}
     spending: dict[tuple[str, str], Decimal] = {}
+    category_names: dict[str, str] = {}
     latest_date: date | None = None
     for currency, category, amount, transaction_date in rows:
         category_key = _category_key(category)
         if category_key in excluded_keys:
             continue
+        category_names.setdefault(
+            category_key, str(category or "").strip() or "Без категории"
+        )
         key = (_currency_key(currency), category_key)
         spending[key] = spending.get(key, Decimal("0")) + abs(_decimal(amount))
         if latest_date is None or transaction_date > latest_date:
             latest_date = transaction_date
-    return spending, latest_date
+    return spending, category_names, latest_date
 
 
 def _format_budget_category_spending(
