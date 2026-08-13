@@ -15,6 +15,12 @@ const wholeNumberFormatter = new Intl.NumberFormat("en-US", {
   maximumFractionDigits: 0,
 });
 
+const monthFormatter = new Intl.DateTimeFormat("ru-RU", {
+  month: "short",
+  year: "numeric",
+  timeZone: "UTC",
+});
+
 const categoryColors = [
   "#0072B2",
   "#E69F00",
@@ -513,6 +519,33 @@ function aggregateForChart(expenses, minCategoryTotal, targetCurrency) {
   return { categories, subcategories, collapsedCategories };
 }
 
+function monthLabel(monthKey) {
+  const [year, month] = monthKey.split("-").map(Number);
+  if (!year || !month) return monthKey;
+  return monthFormatter.format(new Date(Date.UTC(year, month - 1, 1))).replace(" г.", "");
+}
+
+function aggregateMonthlyCashflow(movements, targetCurrency) {
+  const grouped = new Map();
+  for (const movement of movements) {
+    const signed = signedAmount(movement);
+    if (!signed) continue;
+    const converted = convertAmount(Math.abs(signed), movement.currency, targetCurrency);
+    if (converted == null) continue;
+
+    const month = String(movement.date || "").slice(0, 7);
+    if (!month) continue;
+    if (!grouped.has(month)) {
+      grouped.set(month, { month, income: 0, expenses: 0, difference: 0 });
+    }
+    const item = grouped.get(month);
+    if (signed > 0) item.income += converted;
+    if (signed < 0) item.expenses += converted;
+    item.difference = item.income - item.expenses;
+  }
+  return [...grouped.values()].sort((left, right) => left.month.localeCompare(right.month));
+}
+
 function getDisplayCurrency() {
   return normalizeCurrency(document.getElementById("currencyFilter").value);
 }
@@ -560,20 +593,28 @@ function renderExpenseRateMeta(filteredExpenses) {
   meta.textContent = `Все суммы пересчитаны в ${targetCurrency} по курсам open.er-api.com${updated}`;
 }
 
-function renderSummary(filteredExpenses) {
-  document.getElementById("overallSummary").classList.toggle(
-    "is-hidden",
-    dashboardState.activeView !== "expenses",
-  );
-
+function renderSummary(filteredExpenses, filteredMovements) {
+  const summary = document.getElementById("overallSummary");
+  summary.classList.toggle("is-hidden", dashboardState.activeView === "balance");
   const currency = getDisplayCurrency();
-  const overall = summarizeExpenses(filteredExpenses, currency);
-
-  document.getElementById("overallSummary").textContent =
-    `Всего: ${overall.complete ? formatMoney(overall.total, currency) : "—"} · ${overall.count} транзакций`;
+  if (dashboardState.activeView === "cashflow") {
+    const status = expenseConversionStatus(filteredMovements, currency);
+    const months = status.ready
+      ? aggregateMonthlyCashflow(filteredMovements, currency)
+      : [];
+    const totalDifference = months.reduce((total, item) => total + item.difference, 0);
+    summary.textContent =
+      `Доходы − расходы: ${status.ready ? formatMoney(totalDifference, currency, { signed: true }) : "—"}` +
+      ` · ${months.length} мес.`;
+    renderExpenseRateMeta(filteredMovements);
+  } else {
+    const overall = summarizeExpenses(filteredExpenses, currency);
+    summary.textContent =
+      `Всего: ${overall.complete ? formatMoney(overall.total, currency) : "—"} · ${overall.count} транзакций`;
+    renderExpenseRateMeta(filteredExpenses);
+  }
   document.getElementById("minCategoryTotalLabel").textContent =
     `Мин. сумма категории, ${currency}`;
-  renderExpenseRateMeta(filteredExpenses);
 
   const lastSync = dashboardState.lastSync;
   const importedRows = lastSync?.rows_imported ?? "-";
@@ -722,6 +763,135 @@ function renderChart(filteredExpenses) {
     dashboardState.selectedCategory = point?.y || null;
     renderDetails(filteredExpenses);
   });
+}
+
+function renderCashflowTable(months, currency) {
+  const tbody = document.getElementById("cashflowTableRows");
+  tbody.innerHTML = "";
+  for (const item of months) {
+    const row = document.createElement("tr");
+    for (const value of [
+      monthLabel(item.month),
+      formatMoney(item.income, currency),
+      formatMoney(item.expenses, currency),
+      formatMoney(item.difference, currency, { signed: true }),
+    ]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    tbody.appendChild(row);
+  }
+}
+
+function renderCashflowChart(filteredMovements) {
+  const currency = getDisplayCurrency();
+  const chartElement = document.getElementById("cashflowChart");
+  const chartWidth = chartElement.clientWidth || window.innerWidth;
+  const conversionStatus = expenseConversionStatus(filteredMovements, currency);
+  const months = conversionStatus.ready
+    ? aggregateMonthlyCashflow(filteredMovements, currency)
+    : [];
+  const monthKeys = months.map((item) => item.month);
+  const monthLabels = months.map((item) => monthLabel(item.month));
+  const differences = months.map((item) => item.difference);
+  const maxDifference = Math.max(0, ...differences.map((value) => Math.abs(value)));
+
+  renderCashflowTable(months, currency);
+  chartElement.setAttribute(
+    "aria-label",
+    months.length
+      ? `Помесячная разница между доходами и расходами в ${currency}; ${months.length} месяцев`
+      : conversionStatus.ready
+        ? "Нет движений для выбранных фильтров"
+        : conversionStatus.message,
+  );
+
+  const annotations = months.length
+    ? []
+    : [
+        {
+          text: conversionStatus.ready
+            ? "Нет движений для выбранных фильтров"
+            : conversionStatus.message,
+          x: 0.5,
+          y: 0.5,
+          xref: "paper",
+          yref: "paper",
+          showarrow: false,
+          font: { size: 16, color: "#66758a" },
+        },
+      ];
+  const traces = months.length
+    ? [
+        {
+          type: "bar",
+          x: monthKeys,
+          y: differences,
+          marker: {
+            color: differences.map((value) => (value >= 0 ? "#2563eb" : "#d97706")),
+          },
+          customdata: months.map((item) => [
+            monthLabel(item.month),
+            item.income,
+            item.expenses,
+          ]),
+          hovertemplate:
+            "Месяц: %{customdata[0]}<br>" +
+            `Доходы: %{customdata[1]:,.2f} ${currency}<br>` +
+            `Расходы: %{customdata[2]:,.2f} ${currency}<br>` +
+            `Разница: %{y:,.2f} ${currency}` +
+            "<extra></extra>",
+        },
+      ]
+    : [];
+
+  Plotly.react(
+    "cashflowChart",
+    traces,
+    {
+      height: Math.max(400, Math.min(560, chartWidth * 0.42)),
+      showlegend: false,
+      bargap: 0.3,
+      margin: {
+        l: chartWidth < 520 ? 66 : 88,
+        r: chartWidth < 520 ? 18 : 30,
+        t: 26,
+        b: chartWidth < 700 ? 80 : 58,
+      },
+      xaxis: {
+        title: "Месяц",
+        type: "category",
+        categoryorder: "array",
+        categoryarray: monthKeys,
+        tickmode: "array",
+        tickvals: monthKeys,
+        ticktext: monthLabels,
+        tickangle: chartWidth < 700 ? -35 : 0,
+        gridcolor: "#eef2f7",
+      },
+      yaxis: {
+        title: `Доходы − расходы, ${currency}`,
+        gridcolor: "#dfe8f6",
+        zeroline: true,
+        zerolinecolor: "#64748b",
+        zerolinewidth: 2,
+        tickprefix: currencySymbol(currency),
+        separatethousands: true,
+        range: maxDifference > 0 ? [-maxDifference * 1.15, maxDifference * 1.15] : undefined,
+      },
+      annotations,
+      paper_bgcolor: "#ffffff",
+      plot_bgcolor: "#ffffff",
+      hoverlabel: {
+        bgcolor: "#ffffff",
+        bordercolor: "#94a3b8",
+        font: { color: "#111827" },
+      },
+      font: { family: "Avenir Next, Segoe UI, Arial, sans-serif", color: "#111827", size: 14 },
+    },
+    { displayModeBar: false, responsive: true },
+  );
 }
 
 function transactionBelongsToSelectedCategory(expense, selectedCategory, collapsedCategories) {
@@ -987,10 +1157,18 @@ function renderBalanceFilterOptions() {
 
 function renderDashboard() {
   const filteredExpenses = filterExpenses(dashboardState.expenses);
-  renderSummary(filteredExpenses);
-  renderChart(filteredExpenses);
-  renderDetails(filteredExpenses);
-  renderBalance();
+  const filteredMovements = filterExpenses(dashboardState.movements);
+  renderSummary(filteredExpenses, filteredMovements);
+  if (dashboardState.activeView === "expenses") {
+    renderChart(filteredExpenses);
+    renderDetails(filteredExpenses);
+  }
+  if (dashboardState.activeView === "cashflow") {
+    renderCashflowChart(filteredMovements);
+  }
+  if (dashboardState.activeView === "balance") {
+    renderBalance();
+  }
 }
 
 async function loadDashboard() {
@@ -1067,11 +1245,23 @@ function resetBalanceFilters() {
 
 function setActiveView(view) {
   dashboardState.activeView = view;
-  document.getElementById("pageTitle").textContent = view === "balance" ? "Баланс" : "Расходы";
+  const titles = {
+    expenses: "Расходы",
+    cashflow: "Доходы и расходы",
+    balance: "Баланс",
+  };
+  document.getElementById("pageTitle").textContent = titles[view] || titles.expenses;
+  document.getElementById("expenseFilters").classList.toggle("is-hidden", view === "balance");
+  document.getElementById("minCategoryTotalFilter").classList.toggle(
+    "is-hidden",
+    view !== "expenses",
+  );
   document.getElementById("expenseView").classList.toggle("is-hidden", view !== "expenses");
+  document.getElementById("cashflowView").classList.toggle("is-hidden", view !== "cashflow");
   document.getElementById("balanceView").classList.toggle("is-hidden", view !== "balance");
   for (const [buttonId, buttonView] of [
     ["expensesTab", "expenses"],
+    ["cashflowTab", "cashflow"],
     ["balanceTab", "balance"],
   ]) {
     const button = document.getElementById(buttonId);
@@ -1100,8 +1290,10 @@ async function handleDisplayCurrencyChange() {
   dashboardState.exchangeRateError = null;
   renderDashboard();
 
-  const filteredExpenses = filterExpenses(dashboardState.expenses);
-  if (expenseConversionStatus(filteredExpenses, getDisplayCurrency()).ready) return;
+  const rows = dashboardState.activeView === "cashflow"
+    ? filterExpenses(dashboardState.movements)
+    : filterExpenses(dashboardState.expenses);
+  if (expenseConversionStatus(rows, getDisplayCurrency()).ready) return;
 
   try {
     await ensureExchangeRates();
@@ -1111,46 +1303,58 @@ async function handleDisplayCurrencyChange() {
   renderDashboard();
 }
 
-for (const id of [
-  "dateFrom",
-  "dateTo",
-  "accountFilter",
-  "excludedCategoryFilter",
-  "minCategoryTotal",
-]) {
-  document.getElementById(id).addEventListener("change", () => {
-    dashboardState.selectedCategory = null;
-    renderDashboard();
+if (typeof document !== "undefined") {
+  for (const id of [
+    "dateFrom",
+    "dateTo",
+    "accountFilter",
+    "excludedCategoryFilter",
+    "minCategoryTotal",
+  ]) {
+    document.getElementById(id).addEventListener("change", () => {
+      dashboardState.selectedCategory = null;
+      renderDashboard();
+    });
+  }
+
+  for (const id of [
+    "balanceDateFrom",
+    "balanceDateTo",
+    "balanceCurrencyFilter",
+    "accountTypeFilter",
+    "accountStatusFilter",
+  ]) {
+    document.getElementById(id).addEventListener("change", renderDashboard);
+  }
+
+  document.getElementById("syncButton").addEventListener("click", syncFromSheets);
+  document.getElementById("resetFilters").addEventListener("click", resetFilters);
+  document.getElementById("resetBalanceFilters").addEventListener("click", resetBalanceFilters);
+  document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
+  document.getElementById("cashflowTab").addEventListener("click", () => setActiveView("cashflow"));
+  document.getElementById("balanceTab").addEventListener("click", () => setActiveView("balance"));
+  document.getElementById("convertToEur").addEventListener("change", handleConvertToEurChange);
+  document.getElementById("currencyFilter").addEventListener("change", handleDisplayCurrencyChange);
+  document.addEventListener("click", (event) => {
+    if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
+  });
+  window.addEventListener("resize", () => {
+    window.clearTimeout(resizeTimer);
+    resizeTimer = window.setTimeout(renderDashboard, 120);
+  });
+
+  loadDashboard().catch((error) => {
+    const box = document.getElementById("syncError");
+    box.hidden = false;
+    box.textContent = error.message;
   });
 }
 
-for (const id of [
-  "balanceDateFrom",
-  "balanceDateTo",
-  "balanceCurrencyFilter",
-  "accountTypeFilter",
-  "accountStatusFilter",
-]) {
-  document.getElementById(id).addEventListener("change", renderDashboard);
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = {
+    aggregateMonthlyCashflow,
+    setExchangeRatesForTests(rates) {
+      dashboardState.exchangeRates = { base: "EUR", rates };
+    },
+  };
 }
-
-document.getElementById("syncButton").addEventListener("click", syncFromSheets);
-document.getElementById("resetFilters").addEventListener("click", resetFilters);
-document.getElementById("resetBalanceFilters").addEventListener("click", resetBalanceFilters);
-document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
-document.getElementById("balanceTab").addEventListener("click", () => setActiveView("balance"));
-document.getElementById("convertToEur").addEventListener("change", handleConvertToEurChange);
-document.getElementById("currencyFilter").addEventListener("change", handleDisplayCurrencyChange);
-document.addEventListener("click", (event) => {
-  if (!event.target.closest(".multi-select")) closeOtherMultiSelects(null);
-});
-window.addEventListener("resize", () => {
-  window.clearTimeout(resizeTimer);
-  resizeTimer = window.setTimeout(renderDashboard, 120);
-});
-
-loadDashboard().catch((error) => {
-  const box = document.getElementById("syncError");
-  box.hidden = false;
-  box.textContent = error.message;
-});

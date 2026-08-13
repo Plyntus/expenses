@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import json
 import logging
 import re
@@ -404,7 +405,13 @@ def build_daily_report_message(
                 f"{_format_report_date(latest_date)}."
             ),
             "Категории:",
-            *_format_budget_category_spending(category_spending),
+            *_format_budget_category_spending(
+                category_spending,
+                elapsed_days=latest_date.day if latest_date else report_date.day,
+                days_in_month=calendar.monthrange(
+                    report_date.year, report_date.month
+                )[1],
+            ),
         ]
     )
 
@@ -581,22 +588,49 @@ def _monthly_spending(
 
 def _format_budget_category_spending(
     items: list[BudgetCategorySpend],
+    *,
+    elapsed_days: int,
+    days_in_month: int,
 ) -> list[str]:
     if not items:
         return ["нет категорий"]
     return [
-        f"{item.category}: {_format_amount(item.spent)} ({_format_budget_percent(item)})"
+        _format_budget_category_spend(item, elapsed_days, days_in_month)
         for item in items
     ]
 
 
+def _format_budget_category_spend(
+    item: BudgetCategorySpend,
+    elapsed_days: int,
+    days_in_month: int,
+) -> str:
+    run_rate = _run_rate(item.spent, elapsed_days, days_in_month)
+    return (
+        f"{item.category}: {_format_amount(item.spent)} "
+        f"({_format_budget_percent(item)}) "
+        f"RR: {_format_amount(run_rate)} "
+        f"({_format_budget_percent_for_amount(run_rate, item.budget)})"
+    )
+
+
 def _format_budget_percent(item: BudgetCategorySpend) -> str:
-    if item.budget == 0:
-        return "0%" if item.spent == 0 else "n/a"
-    percent = (item.spent / item.budget * Decimal("100")).quantize(
+    return _format_budget_percent_for_amount(item.spent, item.budget)
+
+
+def _format_budget_percent_for_amount(amount: Decimal, budget: Decimal) -> str:
+    if budget == 0:
+        return "0%" if amount == 0 else "n/a"
+    percent = (amount / budget * Decimal("100")).quantize(
         Decimal("1"), rounding=ROUND_HALF_UP
     )
     return f"{percent}%"
+
+
+def _run_rate(amount: Decimal, elapsed_days: int, days_in_month: int) -> Decimal:
+    if elapsed_days <= 0 or days_in_month <= 0:
+        return Decimal("0")
+    return amount / Decimal(elapsed_days) * Decimal(days_in_month)
 
 
 def _format_report_date(value: date | None) -> str:

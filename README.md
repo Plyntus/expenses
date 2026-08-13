@@ -195,9 +195,18 @@ when the report is generated:
 ```text
 За текущий месяц потрачено [sum] EUR. Последняя дата: [date of last transaction].
 Категории:
-[Category]: [sum of spend] ([% from budget])
-[Category]: [sum of spend] ([% from budget])
+[Category]: [sum of spend] ([% from budget]) RR: [projected spend] ([% from budget])
+[Category]: [sum of spend] ([% from budget]) RR: [projected spend] ([% from budget])
 ```
+
+Each category line also includes `RR`: projected full-month spending based on the
+day of the latest transaction, plus that projection as a percentage of budget.
+
+The web dashboard includes a `Доходы и расходы` tab. It groups account movements
+by month and charts income minus expenses around zero. Hovering a bar shows the
+month's income and expense totals. The tab shares the expense view's date, account,
+excluded-category, and display-currency filters; cross-currency amounts use the
+same exchange-rate conversion logic.
 
 Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed explicitly in the budget sheet, with amounts converted to the budget currency.
 

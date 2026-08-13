@@ -17,6 +17,7 @@
           </div>
           <nav class="view-tabs" aria-label="Разделы продукта">
             <button id="expensesTab" class="view-tab is-active" type="button" aria-pressed="true">Расходы</button>
+            <button id="cashflowTab" class="view-tab" type="button" aria-pressed="false">Доходы и расходы</button>
             <button id="balanceTab" class="view-tab" type="button" aria-pressed="false">Баланс</button>
           </nav>
         </div>
@@ -28,8 +29,7 @@
 
       <section id="syncError" class="sync-error" hidden></section>
 
-      <section id="expenseView" class="view-page">
-      <section class="panel filters-panel" aria-label="Параметры расходов">
+      <section id="expenseFilters" class="panel filters-panel" aria-label="Параметры отчёта">
         <div class="filter-item">
           <label for="dateFrom">Период от</label>
           <input id="dateFrom" type="date" />
@@ -50,7 +50,7 @@
           <label for="currencyFilter">Валюта отображения</label>
           <select id="currencyFilter"></select>
         </div>
-        <div class="filter-item">
+        <div id="minCategoryTotalFilter" class="filter-item">
           <label id="minCategoryTotalLabel" for="minCategoryTotal">Мин. сумма категории</label>
           <input id="minCategoryTotal" type="number" min="0" step="0.01" placeholder="Например, 400" />
         </div>
@@ -58,27 +58,53 @@
         <p id="expenseRateMeta" class="filter-meta" aria-live="polite" hidden></p>
       </section>
 
-      <section class="panel chart-panel">
-        <div id="categoryChart" class="chart" role="img" aria-label="Расходы по категориям и субкатегориям"></div>
+      <section id="expenseView" class="view-page">
+        <section class="panel chart-panel">
+          <div id="categoryChart" class="chart" role="img" aria-label="Расходы по категориям и субкатегориям"></div>
+        </section>
+
+        <section id="detailsSection" class="panel table-panel is-hidden">
+          <h2 id="detailsTitle">Транзакции</h2>
+          <div class="table-wrap">
+            <table class="transaction-table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Счет</th>
+                  <th>Сумма</th>
+                  <th>Валюта</th>
+                  <th>Комментарий</th>
+                </tr>
+              </thead>
+              <tbody id="transactionRows"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
-      <section id="detailsSection" class="panel table-panel is-hidden">
-        <h2 id="detailsTitle">Транзакции</h2>
-        <div class="table-wrap">
-          <table class="transaction-table">
-            <thead>
-              <tr>
-                <th>Дата</th>
-                <th>Счет</th>
-                <th>Сумма</th>
-                <th>Валюта</th>
-                <th>Комментарий</th>
-              </tr>
-            </thead>
-            <tbody id="transactionRows"></tbody>
-          </table>
-        </div>
-      </section>
+      <section id="cashflowView" class="view-page is-hidden">
+        <section class="panel chart-panel">
+          <div
+            id="cashflowChart"
+            class="chart"
+            role="img"
+            aria-label="Помесячная разница между доходами и расходами"
+          ></div>
+          <div class="sr-only">
+            <table>
+              <caption>Помесячные доходы, расходы и разница</caption>
+              <thead>
+                <tr>
+                  <th>Месяц</th>
+                  <th>Доходы</th>
+                  <th>Расходы</th>
+                  <th>Разница</th>
+                </tr>
+              </thead>
+              <tbody id="cashflowTableRows"></tbody>
+            </table>
+          </div>
+        </section>
       </section>
 
       <section id="balanceView" class="view-page is-hidden">
