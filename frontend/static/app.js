@@ -4,6 +4,10 @@ const FALLBACK_SUBCATEGORY = "Без субкатегории";
 const FALLBACK_ACCOUNT = "Без счета";
 const FALLBACK_ACCOUNT_TYPE = "Без типа";
 const FALLBACK_ACCOUNT_STATUS = "Без статуса";
+const FALLBACK_INCOME_SOURCE = "Прочие поступления";
+const OTHER_INCOME_SOURCE = "Другие поступления";
+const OTHER_EXPENSE_CATEGORY = "Другие расходы";
+const OTHER_EXPENSE_SUBCATEGORY = "Другие подкатегории";
 const EUR_RATE_API_URL = "https://open.er-api.com/v6/latest/EUR";
 
 const moneyFormatter = new Intl.NumberFormat("en-US", {
@@ -19,6 +23,11 @@ const monthFormatter = new Intl.DateTimeFormat("ru-RU", {
   month: "short",
   year: "numeric",
   timeZone: "UTC",
+});
+
+const percentFormatter = new Intl.NumberFormat("ru-RU", {
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 1,
 });
 
 const categoryColors = [
@@ -38,6 +47,17 @@ const categoryColors = [
   "#7C3AED",
   "#B45309",
   "#0369A1",
+];
+
+const cashflowCategoryColors = [
+  "#E07A5F",
+  "#7C6FCD",
+  "#D69E2E",
+  "#3D8D9B",
+  "#C05A8C",
+  "#5B7DB1",
+  "#87964B",
+  "#A26A45",
 ];
 
 let dashboardState = {
@@ -132,10 +152,23 @@ function formatWholeMoney(value, currency) {
   return currency ? `${amount} ${currency}` : amount;
 }
 
+function formatPercent(value, total) {
+  if (!Number(total)) return "0%";
+  return `${percentFormatter.format((Number(value || 0) / Number(total)) * 100)}%`;
+}
+
 function formatDate(value) {
   if (!value) return "-";
   const [year, month, day] = String(value).split("-");
   return year && month && day ? `${day}.${month}.${year}` : String(value);
+}
+
+function selectedPeriodLabel() {
+  const { dateFrom, dateTo } = getFilters();
+  if (dateFrom && dateTo) return `${formatDate(dateFrom)} — ${formatDate(dateTo)}`;
+  if (dateFrom) return `С ${formatDate(dateFrom)}`;
+  if (dateTo) return `До ${formatDate(dateTo)}`;
+  return "За всё время";
 }
 
 function formatDateTime(value) {
@@ -546,6 +579,86 @@ function aggregateMonthlyCashflow(movements, targetCurrency) {
   return [...grouped.values()].sort((left, right) => left.month.localeCompare(right.month));
 }
 
+function aggregateCashflowSankey(movements, targetCurrency) {
+  const incomeSources = new Map();
+  const expenseCategories = new Map();
+  let totalIncome = 0;
+  let totalExpenses = 0;
+
+  for (const movement of movements) {
+    const signed = signedAmount(movement);
+    if (!signed) continue;
+    const converted = convertAmount(Math.abs(signed), movement.currency, targetCurrency);
+    if (converted == null) continue;
+
+    if (signed > 0) {
+      const source = normalizeText(movement.category, FALLBACK_INCOME_SOURCE);
+      incomeSources.set(source, (incomeSources.get(source) || 0) + converted);
+      totalIncome += converted;
+      continue;
+    }
+
+    const category = normalizeText(movement.category, FALLBACK_CATEGORY);
+    const subcategory = normalizeText(movement.subcategory, FALLBACK_SUBCATEGORY);
+    if (!expenseCategories.has(category)) {
+      expenseCategories.set(category, { name: category, total: 0, subcategories: new Map() });
+    }
+    const group = expenseCategories.get(category);
+    group.total += converted;
+    group.subcategories.set(
+      subcategory,
+      (group.subcategories.get(subcategory) || 0) + converted,
+    );
+    totalExpenses += converted;
+  }
+
+  const byTotalThenName = (left, right) =>
+    right.total - left.total || left.name.localeCompare(right.name, "ru");
+  return {
+    totalIncome,
+    totalExpenses,
+    difference: totalIncome - totalExpenses,
+    incomeSources: [...incomeSources.entries()]
+      .map(([name, total]) => ({ name, total }))
+      .sort(byTotalThenName),
+    expenseCategories: [...expenseCategories.values()]
+      .map((category) => ({
+        name: category.name,
+        total: category.total,
+        subcategories: [...category.subcategories.entries()]
+          .map(([name, total]) => ({ name, total }))
+          .sort(byTotalThenName),
+      }))
+      .sort(byTotalThenName),
+  };
+}
+
+function collapseCashflowItems(items, limit, otherName) {
+  if (items.length <= limit) return items;
+  const visibleCount = Math.max(1, limit - 1);
+  const visible = items.slice(0, visibleCount);
+  const hidden = items.slice(visibleCount);
+  const subcategoryTotals = new Map();
+  for (const item of hidden) {
+    for (const subcategory of item.subcategories || []) {
+      subcategoryTotals.set(
+        subcategory.name,
+        (subcategoryTotals.get(subcategory.name) || 0) + subcategory.total,
+      );
+    }
+  }
+  return [
+    ...visible,
+    {
+      name: otherName,
+      total: hidden.reduce((sum, item) => sum + item.total, 0),
+      subcategories: [...subcategoryTotals.entries()]
+        .map(([name, total]) => ({ name, total }))
+        .sort((left, right) => right.total - left.total),
+    },
+  ];
+}
+
 function getDisplayCurrency() {
   return normalizeCurrency(document.getElementById("currencyFilter").value);
 }
@@ -599,13 +712,12 @@ function renderSummary(filteredExpenses, filteredMovements) {
   const currency = getDisplayCurrency();
   if (dashboardState.activeView === "cashflow") {
     const status = expenseConversionStatus(filteredMovements, currency);
-    const months = status.ready
-      ? aggregateMonthlyCashflow(filteredMovements, currency)
-      : [];
-    const totalDifference = months.reduce((total, item) => total + item.difference, 0);
-    summary.textContent =
-      `Доходы − расходы: ${status.ready ? formatMoney(totalDifference, currency, { signed: true }) : "—"}` +
-      ` · ${months.length} мес.`;
+    const flow = status.ready
+      ? aggregateCashflowSankey(filteredMovements, currency)
+      : { totalIncome: 0, totalExpenses: 0, difference: 0 };
+    summary.textContent = status.ready
+      ? `Доходы: ${formatMoney(flow.totalIncome, currency)} · Расходы: ${formatMoney(flow.totalExpenses, currency)} · Итог: ${formatMoney(flow.difference, currency, { signed: true })}`
+      : "Доходы и расходы: —";
     renderExpenseRateMeta(filteredMovements);
   } else {
     const overall = summarizeExpenses(filteredExpenses, currency);
@@ -765,17 +877,32 @@ function renderChart(filteredExpenses) {
   });
 }
 
-function renderCashflowTable(months, currency) {
+function renderCashflowTable(flow, currency) {
   const tbody = document.getElementById("cashflowTableRows");
   tbody.innerHTML = "";
-  for (const item of months) {
+  const rows = [
+    ...flow.incomeSources.map((item) => [
+      "Источник дохода",
+      item.name,
+      item.total,
+      formatPercent(item.total, flow.totalIncome),
+    ]),
+    ...flow.expenseCategories.map((item) => [
+      "Категория расходов",
+      item.name,
+      item.total,
+      formatPercent(item.total, flow.totalExpenses),
+    ]),
+    [
+      flow.difference >= 0 ? "Остаток" : "Дефицит",
+      "Итог периода",
+      Math.abs(flow.difference),
+      formatPercent(Math.abs(flow.difference), flow.totalIncome),
+    ],
+  ];
+  for (const [type, name, amount, share] of rows) {
     const row = document.createElement("tr");
-    for (const value of [
-      monthLabel(item.month),
-      formatMoney(item.income, currency),
-      formatMoney(item.expenses, currency),
-      formatMoney(item.difference, currency, { signed: true }),
-    ]) {
+    for (const value of [type, name, formatMoney(amount, currency), share]) {
       const cell = document.createElement("td");
       cell.textContent = value;
       row.appendChild(cell);
@@ -784,30 +911,207 @@ function renderCashflowTable(months, currency) {
   }
 }
 
-function renderCashflowChart(filteredMovements) {
+function escapeChartText(value) {
+  return String(value).replace(
+    /[&<>"']/g,
+    (character) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      '"': "&quot;",
+      "'": "&#39;",
+    })[character],
+  );
+}
+
+function cashflowNodeLabel(name, value, shareTotal, currency, compact) {
+  const maxLength = compact ? 17 : 26;
+  const visibleName = name.length > maxLength ? `${name.slice(0, maxLength - 1)}…` : name;
+  return `${escapeChartText(visibleName)}<br>${formatWholeMoney(value, currency)} · ${formatPercent(value, shareTotal)}`;
+}
+
+function hexToRgba(hex, alpha) {
+  const value = hex.replace("#", "");
+  const number = Number.parseInt(value, 16);
+  const red = (number >> 16) & 255;
+  const green = (number >> 8) & 255;
+  const blue = number & 255;
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function buildCashflowSankeyTrace(flow, currency, chartWidth) {
+  const compact = chartWidth < 700;
+  const showSubcategories = chartWidth >= 1040;
+  const showIncomeSources = chartWidth >= 760;
+  const categoryLimit = showSubcategories ? 8 : compact ? 5 : 7;
+  const categories = collapseCashflowItems(
+    flow.expenseCategories,
+    categoryLimit,
+    OTHER_EXPENSE_CATEGORY,
+  );
+  const sources = showIncomeSources
+    ? collapseCashflowItems(flow.incomeSources, 5, OTHER_INCOME_SOURCE)
+    : flow.totalIncome > 0
+      ? [{ name: "Поступления", total: flow.totalIncome }]
+      : [];
+  const deficit = Math.max(0, -flow.difference);
+  const surplus = Math.max(0, flow.difference);
+  const distributedTotal = Math.max(flow.totalIncome, flow.totalExpenses);
+  const categoryX = showSubcategories ? 0.56 : 0.96;
+
+  const nodes = [];
+  const links = [];
+  function addNode(name, value, shareTotal, color, x) {
+    const index = nodes.length;
+    nodes.push({
+      name,
+      value,
+      color,
+      x,
+      label: cashflowNodeLabel(name, value, shareTotal, currency, compact),
+      hover: `${escapeChartText(name)}<br>${formatMoney(value, currency)}<br>${formatPercent(value, shareTotal)}`,
+    });
+    return index;
+  }
+  function addLink(source, target, value, color) {
+    links.push({
+      source,
+      target,
+      value,
+      color,
+      hover: `${escapeChartText(nodes[source].name)} → ${escapeChartText(nodes[target].name)}<br>${formatMoney(value, currency)}`,
+    });
+  }
+
+  const sourceIndexes = sources.map((source) => ({
+    item: source,
+    index: addNode(source.name, source.total, flow.totalIncome, "#2AA8B8", 0.01),
+  }));
+  const deficitIndex = deficit > 0
+    ? addNode("Дефицит периода", deficit, distributedTotal, "#C65D4B", 0.01)
+    : null;
+  const hubName = deficit > 0 ? "Распределено" : "Доходы";
+  const hubIndex = addNode(hubName, distributedTotal, distributedTotal, "#168AAD", 0.26);
+
+  for (const source of sourceIndexes) {
+    addLink(source.index, hubIndex, source.item.total, hexToRgba("#2AA8B8", 0.24));
+  }
+  if (deficitIndex != null) {
+    addLink(deficitIndex, hubIndex, deficit, hexToRgba("#C65D4B", 0.3));
+  }
+
+  categories.forEach((category, categoryIndex) => {
+    const color = cashflowCategoryColors[categoryIndex % cashflowCategoryColors.length];
+    const categoryNodeIndex = addNode(
+      category.name,
+      category.total,
+      distributedTotal,
+      color,
+      categoryX,
+    );
+    addLink(hubIndex, categoryNodeIndex, category.total, hexToRgba(color, 0.25));
+
+    if (!showSubcategories) return;
+    const subcategories = collapseCashflowItems(
+      category.subcategories || [],
+      3,
+      OTHER_EXPENSE_SUBCATEGORY,
+    );
+    for (const subcategory of subcategories) {
+      const subcategoryNodeIndex = addNode(
+        subcategory.name,
+        subcategory.total,
+        distributedTotal,
+        color,
+        0.99,
+      );
+      addLink(
+        categoryNodeIndex,
+        subcategoryNodeIndex,
+        subcategory.total,
+        hexToRgba(color, 0.19),
+      );
+    }
+  });
+
+  if (surplus > 0) {
+    const resultIndex = addNode("Остаток", surplus, flow.totalIncome, "#3FAE75", categoryX);
+    addLink(hubIndex, resultIndex, surplus, hexToRgba("#3FAE75", 0.27));
+  }
+
+  return {
+    type: "sankey",
+    orientation: "h",
+    arrangement: "snap",
+    valueformat: ",.2f",
+    valuesuffix: ` ${currency}`,
+    node: {
+      pad: compact ? 18 : 24,
+      thickness: compact ? 12 : 15,
+      line: { color: "rgba(255, 255, 255, 0.92)", width: 1.5 },
+      label: nodes.map((node) => node.label),
+      customdata: nodes.map((node) => node.hover),
+      hovertemplate: "%{customdata}<extra></extra>",
+      color: nodes.map((node) => node.color),
+      x: nodes.map((node) => node.x),
+    },
+    link: {
+      source: links.map((link) => link.source),
+      target: links.map((link) => link.target),
+      value: links.map((link) => link.value),
+      color: links.map((link) => link.color),
+      customdata: links.map((link) => link.hover),
+      hovertemplate: "%{customdata}<extra></extra>",
+    },
+  };
+}
+
+function renderCashflowMetrics(flow, currency, ready) {
+  document.getElementById("cashflowPeriod").textContent = selectedPeriodLabel();
+  document.getElementById("cashflowIncome").textContent = ready
+    ? formatMoney(flow.totalIncome, currency)
+    : "—";
+  document.getElementById("cashflowExpenses").textContent = ready
+    ? formatMoney(flow.totalExpenses, currency)
+    : "—";
+
+  const isDeficit = flow.difference < 0;
+  const resultCard = document.getElementById("cashflowResultCard");
+  document.getElementById("cashflowResultLabel").textContent = isDeficit ? "Дефицит" : "Остаток";
+  document.getElementById("cashflowResult").textContent = ready
+    ? formatMoney(Math.abs(flow.difference), currency)
+    : "—";
+  resultCard.classList.toggle("is-deficit", ready && isDeficit);
+}
+
+function renderCashflowSankey(filteredMovements) {
   const currency = getDisplayCurrency();
   const chartElement = document.getElementById("cashflowChart");
   const chartWidth = chartElement.clientWidth || window.innerWidth;
   const conversionStatus = expenseConversionStatus(filteredMovements, currency);
-  const months = conversionStatus.ready
-    ? aggregateMonthlyCashflow(filteredMovements, currency)
-    : [];
-  const monthKeys = months.map((item) => item.month);
-  const monthLabels = months.map((item) => monthLabel(item.month));
-  const differences = months.map((item) => item.difference);
-  const maxDifference = Math.max(0, ...differences.map((value) => Math.abs(value)));
+  const flow = conversionStatus.ready
+    ? aggregateCashflowSankey(filteredMovements, currency)
+    : {
+        totalIncome: 0,
+        totalExpenses: 0,
+        difference: 0,
+        incomeSources: [],
+        expenseCategories: [],
+      };
+  const hasData = flow.totalIncome > 0 || flow.totalExpenses > 0;
 
-  renderCashflowTable(months, currency);
+  renderCashflowTable(flow, currency);
+  renderCashflowMetrics(flow, currency, conversionStatus.ready);
   chartElement.setAttribute(
     "aria-label",
-    months.length
-      ? `Помесячная разница между доходами и расходами в ${currency}; ${months.length} месяцев`
+    hasData
+      ? `Распределение денежных потоков в ${currency}. Доходы ${formatMoney(flow.totalIncome, currency)}, расходы ${formatMoney(flow.totalExpenses, currency)}, ${flow.difference >= 0 ? "остаток" : "дефицит"} ${formatMoney(Math.abs(flow.difference), currency)}`
       : conversionStatus.ready
         ? "Нет движений для выбранных фильтров"
         : conversionStatus.message,
   );
 
-  const annotations = months.length
+  const annotations = hasData
     ? []
     : [
         {
@@ -822,63 +1126,23 @@ function renderCashflowChart(filteredMovements) {
           font: { size: 16, color: "#66758a" },
         },
       ];
-  const traces = months.length
-    ? [
-        {
-          type: "bar",
-          x: monthKeys,
-          y: differences,
-          marker: {
-            color: differences.map((value) => (value >= 0 ? "#2563eb" : "#d97706")),
-          },
-          customdata: months.map((item) => [
-            monthLabel(item.month),
-            item.income,
-            item.expenses,
-          ]),
-          hovertemplate:
-            "Месяц: %{customdata[0]}<br>" +
-            `Доходы: %{customdata[1]:,.2f} ${currency}<br>` +
-            `Расходы: %{customdata[2]:,.2f} ${currency}<br>` +
-            `Разница: %{y:,.2f} ${currency}` +
-            "<extra></extra>",
-        },
-      ]
-    : [];
+  const traces = hasData ? [buildCashflowSankeyTrace(flow, currency, chartWidth)] : [];
+  const visibleCategoryCount = Math.min(flow.expenseCategories.length, chartWidth < 700 ? 5 : 8);
+  const chartHeight = chartWidth >= 1040
+    ? Math.max(520, Math.min(820, visibleCategoryCount * 76 + 180))
+    : Math.max(440, Math.min(640, visibleCategoryCount * 62 + 170));
 
   Plotly.react(
     "cashflowChart",
     traces,
     {
-      height: Math.max(400, Math.min(560, chartWidth * 0.42)),
+      height: chartHeight,
       showlegend: false,
-      bargap: 0.3,
       margin: {
-        l: chartWidth < 520 ? 66 : 88,
-        r: chartWidth < 520 ? 18 : 30,
-        t: 26,
-        b: chartWidth < 700 ? 80 : 58,
-      },
-      xaxis: {
-        title: "Месяц",
-        type: "category",
-        categoryorder: "array",
-        categoryarray: monthKeys,
-        tickmode: "array",
-        tickvals: monthKeys,
-        ticktext: monthLabels,
-        tickangle: chartWidth < 700 ? -35 : 0,
-        gridcolor: "#eef2f7",
-      },
-      yaxis: {
-        title: `Доходы − расходы, ${currency}`,
-        gridcolor: "#dfe8f6",
-        zeroline: true,
-        zerolinecolor: "#64748b",
-        zerolinewidth: 2,
-        tickprefix: currencySymbol(currency),
-        separatethousands: true,
-        range: maxDifference > 0 ? [-maxDifference * 1.15, maxDifference * 1.15] : undefined,
+        l: chartWidth < 700 ? 8 : 22,
+        r: chartWidth < 700 ? 8 : 24,
+        t: 18,
+        b: 18,
       },
       annotations,
       paper_bgcolor: "#ffffff",
@@ -888,7 +1152,11 @@ function renderCashflowChart(filteredMovements) {
         bordercolor: "#94a3b8",
         font: { color: "#111827" },
       },
-      font: { family: "Avenir Next, Segoe UI, Arial, sans-serif", color: "#111827", size: 14 },
+      font: {
+        family: "Avenir Next, Segoe UI, Arial, sans-serif",
+        color: "#1e293b",
+        size: chartWidth < 700 ? 11 : 13,
+      },
     },
     { displayModeBar: false, responsive: true },
   );
@@ -1164,7 +1432,7 @@ function renderDashboard() {
     renderDetails(filteredExpenses);
   }
   if (dashboardState.activeView === "cashflow") {
-    renderCashflowChart(filteredMovements);
+    renderCashflowSankey(filteredMovements);
   }
   if (dashboardState.activeView === "balance") {
     renderBalance();
@@ -1352,6 +1620,7 @@ if (typeof document !== "undefined") {
 
 if (typeof module !== "undefined" && module.exports) {
   module.exports = {
+    aggregateCashflowSankey,
     aggregateMonthlyCashflow,
     setExchangeRatesForTests(rates) {
       dashboardState.exchangeRates = { base: "EUR", rates };

@@ -83,22 +83,51 @@
       </section>
 
       <section id="cashflowView" class="view-page is-hidden">
-        <section class="panel chart-panel">
+        <section class="panel chart-panel cashflow-panel">
+          <header class="cashflow-panel-header">
+            <div>
+              <p class="section-kicker">Денежный поток</p>
+              <h2>Как распределились деньги</h2>
+            </div>
+            <p id="cashflowPeriod" class="cashflow-period">Выбранный период</p>
+          </header>
+
+          <div class="cashflow-metrics" aria-label="Итоги денежного потока">
+            <article class="cashflow-metric cashflow-metric-income">
+              <span>Доходы</span>
+              <strong id="cashflowIncome">—</strong>
+            </article>
+            <article class="cashflow-metric cashflow-metric-expenses">
+              <span>Расходы</span>
+              <strong id="cashflowExpenses">—</strong>
+            </article>
+            <article id="cashflowResultCard" class="cashflow-metric cashflow-metric-result">
+              <span id="cashflowResultLabel">Остаток</span>
+              <strong id="cashflowResult">—</strong>
+            </article>
+          </div>
+
           <div
             id="cashflowChart"
-            class="chart"
+            class="chart cashflow-chart"
             role="img"
-            aria-label="Помесячная разница между доходами и расходами"
+            aria-label="Распределение доходов по категориям расходов"
           ></div>
+          <div class="cashflow-legend" aria-hidden="true">
+            <span><i class="legend-dot legend-dot-income"></i>Поступления</span>
+            <span><i class="legend-dot legend-dot-expense"></i>Расходы</span>
+            <span><i class="legend-dot legend-dot-result"></i>Остаток или дефицит</span>
+          </div>
+          <p class="chart-help">Толщина линии соответствует сумме. Наведите или нажмите на поток, чтобы увидеть детали.</p>
           <div class="sr-only">
             <table>
-              <caption>Помесячные доходы, расходы и разница</caption>
+              <caption>Источники дохода, категории расходов и итог периода</caption>
               <thead>
                 <tr>
-                  <th>Месяц</th>
-                  <th>Доходы</th>
-                  <th>Расходы</th>
-                  <th>Разница</th>
+                  <th>Тип</th>
+                  <th>Название</th>
+                  <th>Сумма</th>
+                  <th>Доля</th>
                 </tr>
               </thead>
               <tbody id="cashflowTableRows"></tbody>

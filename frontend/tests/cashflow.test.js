@@ -2,9 +2,66 @@ const assert = require("node:assert/strict");
 const test = require("node:test");
 
 const {
+  aggregateCashflowSankey,
   aggregateMonthlyCashflow,
   setExchangeRatesForTests,
 } = require("../static/app.js");
+
+test("builds income-to-category-to-subcategory totals for the Sankey view", () => {
+  setExchangeRatesForTests({ EUR: 1, USD: 2, RSD: 117 });
+
+  const flow = aggregateCashflowSankey(
+    [
+      { amount: "1000", currency: "EUR", category: "Зарплата" },
+      { amount: "400", currency: "USD", category: "Фриланс" },
+      { amount: "-23400", currency: "RSD", category: "Жильё", subcategory: "Аренда" },
+      { amount: "-100", currency: "EUR", category: "Еда", subcategory: "Продукты" },
+      { amount: "-50", currency: "EUR", category: "Еда", subcategory: "Кафе" },
+    ],
+    "EUR",
+  );
+
+  assert.equal(flow.totalIncome, 1200);
+  assert.equal(flow.totalExpenses, 350);
+  assert.equal(flow.difference, 850);
+  assert.deepEqual(flow.incomeSources, [
+    { name: "Зарплата", total: 1000 },
+    { name: "Фриланс", total: 200 },
+  ]);
+  assert.deepEqual(flow.expenseCategories, [
+    {
+      name: "Жильё",
+      total: 200,
+      subcategories: [{ name: "Аренда", total: 200 }],
+    },
+    {
+      name: "Еда",
+      total: 150,
+      subcategories: [
+        { name: "Продукты", total: 100 },
+        { name: "Кафе", total: 50 },
+      ],
+    },
+  ]);
+});
+
+test("reports a deficit and ignores zero or unconvertible Sankey movements", () => {
+  setExchangeRatesForTests({ EUR: 1 });
+
+  const flow = aggregateCashflowSankey(
+    [
+      { amount: "100", currency: "EUR", category: "Доход" },
+      { amount: "-175", currency: "EUR", category: "Расход" },
+      { amount: "0", currency: "EUR", category: "Ноль" },
+      { amount: "-50", currency: "XYZ", category: "Без курса" },
+    ],
+    "EUR",
+  );
+
+  assert.equal(flow.totalIncome, 100);
+  assert.equal(flow.totalExpenses, 175);
+  assert.equal(flow.difference, -75);
+});
 
 test("aggregates monthly income and expenses after converting currencies", () => {
   setExchangeRatesForTests({ EUR: 1, USD: 2, RSD: 117 });
