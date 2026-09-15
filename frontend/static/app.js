@@ -329,14 +329,22 @@ function getFilters() {
     dateFrom: document.getElementById("dateFrom").value,
     dateTo: document.getElementById("dateTo").value,
     accounts: getMultiSelectedValues("accountFilter"),
+    categories: getMultiSelectedValues("categoryFilter"),
     excludedCategories: getMultiSelectedValues("excludedCategoryFilter"),
     minCategoryTotal: Math.max(0, Number(document.getElementById("minCategoryTotal").value || 0)),
   };
 }
 
+function matchesSelectedExpenseCategories(movement, selectedCategories) {
+  if (!selectedCategories.size || signedAmount(movement) >= 0) return true;
+  const category = normalizeText(movement.category, FALLBACK_CATEGORY);
+  return selectedCategories.has(category);
+}
+
 function filterExpenses(expenses) {
   const filters = getFilters();
   const accountSet = new Set(filters.accounts);
+  const categorySet = new Set(filters.categories);
   const excludedCategorySet = new Set(filters.excludedCategories);
 
   return expenses.filter((expense) => {
@@ -346,6 +354,7 @@ function filterExpenses(expenses) {
     if (filters.dateFrom && expense.date < filters.dateFrom) return false;
     if (filters.dateTo && expense.date > filters.dateTo) return false;
     if (accountSet.size && !accountSet.has(account)) return false;
+    if (!matchesSelectedExpenseCategories(expense, categorySet)) return false;
     if (excludedCategorySet.has(category)) return false;
     return true;
   });
@@ -1345,6 +1354,7 @@ function renderFilterOptions() {
   ].sort();
 
   setMultiSelectOptions("accountFilter", accounts, getMultiSelectedValues("accountFilter"));
+  setMultiSelectOptions("categoryFilter", categories, getMultiSelectedValues("categoryFilter"));
   setMultiSelectOptions(
     "excludedCategoryFilter",
     categories,
@@ -1487,7 +1497,7 @@ function resetFilters() {
   document.getElementById("dateFrom").value = "";
   document.getElementById("dateTo").value = "";
   for (const checkbox of document.querySelectorAll(
-    "#accountFilter input[type='checkbox'], #excludedCategoryFilter input[type='checkbox']",
+    "#accountFilter input[type='checkbox'], #categoryFilter input[type='checkbox'], #excludedCategoryFilter input[type='checkbox']",
   )) {
     checkbox.checked = false;
   }
@@ -1576,6 +1586,7 @@ if (typeof document !== "undefined") {
     "dateFrom",
     "dateTo",
     "accountFilter",
+    "categoryFilter",
     "excludedCategoryFilter",
     "minCategoryTotal",
   ]) {
@@ -1622,6 +1633,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aggregateCashflowSankey,
     aggregateMonthlyCashflow,
+    matchesSelectedExpenseCategories,
     setExchangeRatesForTests(rates) {
       dashboardState.exchangeRates = { base: "EUR", rates };
     },

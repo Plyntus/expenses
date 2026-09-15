@@ -4,8 +4,30 @@ const test = require("node:test");
 const {
   aggregateCashflowSankey,
   aggregateMonthlyCashflow,
+  matchesSelectedExpenseCategories,
   setExchangeRatesForTests,
 } = require("../static/app.js");
+
+test("filters selected expense categories without removing income context", () => {
+  const selectedCategories = new Set(["Жильё"]);
+
+  assert.equal(
+    matchesSelectedExpenseCategories({ amount: "-100", category: "Жильё" }, selectedCategories),
+    true,
+  );
+  assert.equal(
+    matchesSelectedExpenseCategories({ amount: "-50", category: "Питание" }, selectedCategories),
+    false,
+  );
+  assert.equal(
+    matchesSelectedExpenseCategories({ amount: "1000", category: "Зарплата" }, selectedCategories),
+    true,
+  );
+  assert.equal(
+    matchesSelectedExpenseCategories({ amount: "-50", category: "Питание" }, new Set()),
+    true,
+  );
+});
 
 test("builds income-to-category-to-subcategory totals for the Sankey view", () => {
   setExchangeRatesForTests({ EUR: 1, USD: 2, RSD: 117 });
