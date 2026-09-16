@@ -4,27 +4,31 @@ const test = require("node:test");
 const {
   aggregateCashflowSankey,
   aggregateMonthlyCashflow,
-  matchesSelectedExpenseCategories,
+  matchesSelectedCategories,
   setExchangeRatesForTests,
 } = require("../static/app.js");
 
-test("filters selected expense categories without removing income context", () => {
+test("strictly filters income and expenses by selected categories", () => {
   const selectedCategories = new Set(["Жильё"]);
 
   assert.equal(
-    matchesSelectedExpenseCategories({ amount: "-100", category: "Жильё" }, selectedCategories),
+    matchesSelectedCategories({ amount: "-100", category: "Жильё" }, selectedCategories),
     true,
   );
   assert.equal(
-    matchesSelectedExpenseCategories({ amount: "-50", category: "Питание" }, selectedCategories),
+    matchesSelectedCategories({ amount: "-50", category: "Питание" }, selectedCategories),
     false,
   );
   assert.equal(
-    matchesSelectedExpenseCategories({ amount: "1000", category: "Зарплата" }, selectedCategories),
+    matchesSelectedCategories({ amount: "1000", category: "Зарплата" }, selectedCategories),
+    false,
+  );
+  assert.equal(
+    matchesSelectedCategories({ amount: "1000", category: "Жильё" }, selectedCategories),
     true,
   );
   assert.equal(
-    matchesSelectedExpenseCategories({ amount: "-50", category: "Питание" }, new Set()),
+    matchesSelectedCategories({ amount: "-50", category: "Питание" }, new Set()),
     true,
   );
 });

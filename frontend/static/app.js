@@ -335,8 +335,8 @@ function getFilters() {
   };
 }
 
-function matchesSelectedExpenseCategories(movement, selectedCategories) {
-  if (!selectedCategories.size || signedAmount(movement) >= 0) return true;
+function matchesSelectedCategories(movement, selectedCategories) {
+  if (!selectedCategories.size) return true;
   const category = normalizeText(movement.category, FALLBACK_CATEGORY);
   return selectedCategories.has(category);
 }
@@ -354,7 +354,7 @@ function filterExpenses(expenses) {
     if (filters.dateFrom && expense.date < filters.dateFrom) return false;
     if (filters.dateTo && expense.date > filters.dateTo) return false;
     if (accountSet.size && !accountSet.has(account)) return false;
-    if (!matchesSelectedExpenseCategories(expense, categorySet)) return false;
+    if (!matchesSelectedCategories(expense, categorySet)) return false;
     if (excludedCategorySet.has(category)) return false;
     return true;
   });
@@ -1633,7 +1633,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aggregateCashflowSankey,
     aggregateMonthlyCashflow,
-    matchesSelectedExpenseCategories,
+    matchesSelectedCategories,
     setExchangeRatesForTests(rates) {
       dashboardState.exchangeRates = { base: "EUR", rates };
     },
