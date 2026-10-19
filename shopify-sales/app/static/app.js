@@ -66,9 +66,10 @@ function productRow(product, currency) {
   return row;
 }
 function dataView(data) {
-  $('revenue').textContent = money(data.totals.revenue, data.currency);
-  $('quantity').textContent = fmt.format(data.totals.quantity);
-  $('orders').textContent = fmt.format(data.totals.orders);
+  const hasData = state.last_success && data.products.length;
+  $('revenue').textContent = hasData ? money(data.totals.revenue, data.currency) : '—';
+  $('quantity').textContent = hasData ? fmt.format(data.totals.quantity) : '—';
+  $('orders').textContent = hasData ? fmt.format(data.totals.orders) : '—';
   $('empty').hidden = !state.configured || data.products.length > 0;
   $('charts-area').hidden = !data.products.length;
   $('currency').textContent = data.currency;

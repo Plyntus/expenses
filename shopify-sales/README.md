@@ -2,6 +2,8 @@
 
 Separate service in the expenses repository. It has its own image, password, database and Coolify resource. The root compose file and existing expenses application are unchanged.
 
+Configured Coolify resource: `shopify-sales` (`bsx2yfwc7vai3076g1uixf1p`). External address: `https://flipper1.78.46.135.213.sslip.io`. This address resolves to the Hetzner server without buying a domain. HTTPS still depends on successful certificate issuance and renewal from the shared DNS service. Dashboard credentials are kept in Coolify runtime variables, not in this repository.
+
 One Python/FastAPI process polls Shopify GraphQL Admin API every 60 seconds, even with no browser open. SQLite persists order lines; the page reads the local data and refreshes every minute. Chart.js is bundled locally. No customer names, emails, addresses or payment details are requested or stored.
 
 ## 1. Shopify connection
@@ -38,7 +40,7 @@ Runtime variables: copy keys from `.env.example`. Required for any startup: `DAS
 
 Use **one replica and one Uvicorn worker**. SQLite and the in-process poller are intended for a single instance. During deployment, stop the old instance before the replacement writes to the shared volume (disable rolling updates if needed). The volume must be writable by UID/GID `10001`; a new Docker named volume inherits the image's `/data` ownership. For an existing bind mount, set that directory's owner to `10001:10001`.
 
-The hostname does not need a separate hosting plan. It does need DNS under your control: an A record for `flipper1` pointing to `78.46.135.213` (verify the server IP). Remove or correct AAAA if IPv6 is not configured. If you do not own/control `sales.com`, use your own domain or a Coolify-generated address. Wait for DNS, then let Coolify issue the HTTPS certificate. Basic Auth credentials must be used over HTTPS.
+For a custom hostname such as `flipper1.sales.com`, you need control of its DNS, but no separate hosting plan. Set an A record pointing to `78.46.135.213` (verify the server IP), and remove or correct AAAA if IPv6 is not configured. Without a custom domain, the configured `flipper1.78.46.135.213.sslip.io` uses public DNS from sslip.io. Let Coolify issue and renew the HTTPS certificate; shared-domain certificate limits can affect issuance. Verify a trusted certificate before entering a password. See [the DNS service's TLS documentation](https://nip.io/#tls) for its certificate support. Basic Auth credentials must be used over HTTPS.
 
 References: [Coolify Dockerfile build](https://coolify.io/docs/applications/builds/dockerfile), [persistent storage](https://coolify.io/docs/knowledge-base/persistent-storage).
 

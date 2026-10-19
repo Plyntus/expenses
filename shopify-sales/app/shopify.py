@@ -1,4 +1,5 @@
 import asyncio
+import re
 import time
 
 import httpx
@@ -119,5 +120,6 @@ class Shopify:
                 nodes { id title status } pageInfo { hasNextPage endCursor }
             }
         }"""
-        escaped = search.replace("\\", "\\\\").replace('"', '\\"')
-        return (await self.graphql(query, {"query": f'title:"{escaped}"*' if search else "", "after": after}))["products"]
+        tokens = [re.sub(r'''([\\():"'*])''', r'\\\1', token) for token in search.split()]
+        search_query = " AND ".join(f"title:{token}*" for token in tokens)
+        return (await self.graphql(query, {"query": search_query, "after": after}))["products"]
