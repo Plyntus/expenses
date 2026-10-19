@@ -4,7 +4,7 @@ const fmt = new Intl.NumberFormat('en-US');
 const colors = ['#c45100', '#2856a3', '#8052a1', '#68732c'];
 const dashes = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
 const points = ['circle', 'rect', 'triangle', 'rectRot'];
-let state, chartUnits, chartHourly, refreshing = false, refreshAgain = false;
+let state, chartUnits, chartHourly, chartPurchases, chartConversion, refreshing = false, refreshAgain = false;
 const dayLabel = date => new Intl.DateTimeFormat('en-US', {day: 'numeric', month: 'short', timeZone: 'UTC'}).format(new Date(date + 'T12:00:00Z'));
 
 async function api(path) {
@@ -116,14 +116,72 @@ function trafficView(data) {
   if (!data) message = 'Sessions could not be loaded. Retrying next minute.';
   $('traffic-status').textContent = message;
 }
+function acquisitionView(data) {
+  if (chartPurchases) { chartPurchases.destroy(); chartPurchases = null; }
+  if (chartConversion) { chartConversion.destroy(); chartConversion = null; }
+  const purchasesReady = Boolean(data && data.purchases_available);
+  const conversionReady = Boolean(data && data.conversion_available);
+  $('purchases-wrap').hidden = !purchasesReady; $('purchases-empty').hidden = purchasesReady;
+  $('conversion-wrap').hidden = !conversionReady; $('conversion-empty').hidden = conversionReady;
+  if (!data) {
+    $('acquisition-note').textContent = 'Order source charts could not be loaded. Retrying next minute.';
+    $('source-table').replaceChildren(); return;
+  }
+  const segments = [{key: 'email', label: 'Email', color: colors[0]}, {key: 'other', label: 'Other', color: colors[1]}];
+  const notes = [`${fmt.format(data.matched_orders)} orders matched to this landing page`];
+  if (data.pending_orders) notes.push(`${fmt.format(data.pending_orders)} orders awaiting source data; counts are provisional`);
+  if (data.unlinked_orders) notes.push(`${fmt.format(data.unlinked_orders)} orders without linked visits`);
+  if (data.other_landing_page_orders) notes.push(`${fmt.format(data.other_landing_page_orders)} orders from other landing pages excluded`);
+  if (data.awaiting_sessions_orders) notes.push(`${fmt.format(data.awaiting_sessions_orders)} orders awaiting matching session data`);
+  if (data.last_success) notes.push(`Sessions updated ${new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeStyle: 'short', timeZone: data.timezone}).format(new Date(data.last_success))} · ${data.timezone}`);
+  if (data.stale) notes.push('Sessions report may be delayed');
+  if (data.sessions_error) notes.push(data.sessions_error);
+  if (data.attribution_error) notes.push(data.attribution_error);
+  $('acquisition-note').textContent = notes.join(' · ');
+  const counts = segments.map(s => `${s.label}: ${fmt.format(data.daily.reduce((sum, d) => sum + d[s.key + '_orders'], 0))}`);
+  $('purchases-summary').textContent = purchasesReady ? `Orders by order date · ${counts.join(' · ')}` : 'Waiting for Shopify order sources';
+  if (purchasesReady) {
+    const options = chartOptions();
+    options.plugins.tooltip.callbacks.label = c => `${c.dataset.label}: ${fmt.format(c.parsed.y)} orders`;
+    chartPurchases = new Chart($('source-purchases-chart'), {type: 'bar', data: {
+      labels: data.daily.map(d => dayLabel(d.date)),
+      datasets: segments.map(s => ({label: s.label, data: data.daily.map(d => d[s.key + '_orders']), backgroundColor: s.color, maxBarThickness: 48}))}, options});
+  }
+  const timeFormat = new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: data.timezone, timeZoneName: 'shortOffset'});
+  if (conversionReady) {
+    const options = chartOptions();
+    options.scales.y.ticks.precision = 2;
+    options.scales.y.ticks.callback = value => `${Number(value.toFixed(2))}%`;
+    options.plugins.tooltip.callbacks.title = items => {
+      const hour = data.hourly[items[0].dataIndex];
+      return `${timeFormat.format(new Date(hour.start_at))} – ${timeFormat.format(new Date(hour.end_at))}`;
+    };
+    options.plugins.tooltip.callbacks.label = c => {
+      const key = segments[c.datasetIndex].key, hour = data.hourly[c.dataIndex];
+      return `${c.dataset.label}: ${c.parsed.y.toFixed(2)}% (${fmt.format(hour[key + '_orders'])} orders / ${fmt.format(hour[key + '_sessions'])} sessions)`;
+    };
+    const shortTime = new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: data.timezone});
+    chartConversion = new Chart($('source-conversion-chart'), {type: 'line', data: {
+      labels: data.hourly.map(h => shortTime.format(new Date(h.start_at))),
+      datasets: segments.map((s, i) => ({label: s.label, data: data.hourly.map(h => h[s.key + '_conversion']),
+        borderColor: s.color, backgroundColor: s.color, borderDash: dashes[i], pointStyle: points[i],
+        borderWidth: 2, tension: 0, spanGaps: false, pointRadius: data.hourly.length > 48 ? 0 : 2, pointHoverRadius: 5}))}, options});
+  }
+  $('source-table').replaceChildren(...(conversionReady ? data.hourly.slice().reverse().map(hour => {
+    const row = element('tr');
+    const values = [timeFormat.format(new Date(hour.start_at))];
+    for (const s of segments) values.push(fmt.format(hour[s.key + '_sessions']), fmt.format(hour[s.key + '_orders']), hour[s.key + '_conversion'] === null ? '—' : hour[s.key + '_conversion'].toFixed(2) + '%');
+    values.forEach(value => row.append(element('td', '', value))); return row;
+  }) : []));
+}
 async function refresh() {
   if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
   try {
     state = await api('/api/status'); statusView(state);
     const days = $('period').value;
-    const [sales, traffic] = await Promise.all([api('/api/dashboard?days=' + days), api('/api/traffic?days=' + days).catch(() => null)]);
-    dataView(sales); trafficView(traffic);
+    const [sales, traffic, acquisition] = await Promise.all([api('/api/dashboard?days=' + days), api('/api/traffic?days=' + days).catch(() => null), api('/api/acquisition?days=' + days).catch(() => null)]);
+    dataView(sales); trafficView(traffic); acquisitionView(acquisition);
   } catch (error) {
     notice(error.message);
     $('connection').textContent = 'Connection lost'; $('connection').className = 'connection';

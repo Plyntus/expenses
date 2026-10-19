@@ -310,7 +310,7 @@ class ApiTests(unittest.TestCase):
         icon = self.client.get("/favicon.png")
         self.assertEqual(icon.status_code, 200)
         self.assertEqual(icon.headers["content-type"], "image/png")
-        for path in ("/", "/assets/app.js", "/assets/flipper-one.png", "/api/status", "/api/dashboard", "/api/traffic"):
+        for path in ("/", "/assets/app.js", "/assets/flipper-one.png", "/api/status", "/api/dashboard", "/api/traffic", "/api/acquisition"):
             self.assertEqual(self.client.get(path).status_code, 401, path)
         self.assertEqual(self.client.get("/api/dashboard", auth=self.auth).status_code, 200)
 
@@ -322,6 +322,9 @@ class ApiTests(unittest.TestCase):
         self.assertIsNone(traffic.json()['sessions'])
         self.assertFalse(traffic.json()['available'])
         self.assertEqual(self.client.get('/api/traffic?days=0', auth=self.auth).status_code, 422)
+        source=self.client.get('/api/acquisition?days=1',auth=self.auth)
+        self.assertEqual(source.status_code,200)
+        self.assertFalse(source.json()['purchases_available'])
         for path in ("/", "/assets/style.css", "/assets/app.js", "/assets/chart.umd.js", "/assets/flipper-one.png"):
             self.assertEqual(self.client.get(path, auth=self.auth).status_code, 200, path)
         self.assertEqual(self.client.get("/assets/unknown.png", auth=self.auth).status_code, 404)

@@ -40,6 +40,11 @@ class Store:
                 CREATE INDEX IF NOT EXISTS lines_order ON lines(order_id);
                 CREATE INDEX IF NOT EXISTS orders_created ON orders(created_at);
                 CREATE INDEX IF NOT EXISTS lines_sku ON lines(sku);
+                CREATE TABLE IF NOT EXISTS order_attribution (
+                    order_id TEXT PRIMARY KEY REFERENCES orders(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL, visit_at TEXT, landing_match INTEGER NOT NULL,
+                    medium_group TEXT, checked_at TEXT NOT NULL, order_updated_at TEXT NOT NULL
+                );
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
             if "financial_status" not in columns:
