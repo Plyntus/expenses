@@ -75,13 +75,17 @@ def create_app(settings=None, shopify=None, poll=True):
     async def health():
         return {"status": "ok"}
 
+    @app.get("/favicon.png")
+    async def favicon():
+        return FileResponse(STATIC / "favicon.png", media_type="image/png")
+
     @app.get("/", dependencies=[Depends(authenticate)])
     async def index():
         return FileResponse(STATIC / "index.html")
 
     @app.get("/assets/{name}", dependencies=[Depends(authenticate)])
     async def asset(name: str):
-        if name not in ("app.js", "style.css", "chart.umd.js"):
+        if name not in ("app.js", "style.css", "chart.umd.js", "flipper-one.png"):
             raise HTTPException(404)
         return FileResponse(STATIC / name)
 

@@ -1,7 +1,7 @@
 'use strict';
 const $ = id => document.getElementById(id);
 const fmt = new Intl.NumberFormat('en-US');
-const colors = ['#176c53', '#2856a3', '#8052a1', '#9b6616'];
+const colors = ['#c45100', '#2856a3', '#8052a1', '#68732c'];
 const dashes = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
 const points = ['circle', 'rect', 'triangle', 'rectRot'];
 let state, chartUnits, chartHourly, refreshing = false;

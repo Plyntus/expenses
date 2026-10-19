@@ -255,17 +255,21 @@ class ApiTests(unittest.TestCase):
         self.client.close()
         self.tmp.cleanup()
 
-    def test_health_only_is_public(self):
+    def test_health_and_favicon_are_public_but_dashboard_is_protected(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
-        for path in ("/", "/assets/app.js", "/api/status", "/api/dashboard"):
+        icon = self.client.get("/favicon.png")
+        self.assertEqual(icon.status_code, 200)
+        self.assertEqual(icon.headers["content-type"], "image/png")
+        for path in ("/", "/assets/app.js", "/assets/flipper-one.png", "/api/status", "/api/dashboard"):
             self.assertEqual(self.client.get(path).status_code, 401, path)
         self.assertEqual(self.client.get("/api/dashboard", auth=self.auth).status_code, 200)
 
     def test_setup_before_credentials_and_all_assets(self):
         response = self.client.get("/api/status", auth=self.auth)
         self.assertFalse(response.json()["configured"])
-        for path in ("/", "/assets/style.css", "/assets/app.js", "/assets/chart.umd.js"):
+        for path in ("/", "/assets/style.css", "/assets/app.js", "/assets/chart.umd.js", "/assets/flipper-one.png"):
             self.assertEqual(self.client.get(path, auth=self.auth).status_code, 200, path)
+        self.assertEqual(self.client.get("/assets/unknown.png", auth=self.auth).status_code, 404)
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
 

@@ -4,7 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#101010">
   <title>Flipper One Pre-order · Sales Pulse</title>
+  <link rel="icon" type="image/png" sizes="256x256" href="/favicon.png">
+  <link rel="apple-touch-icon" href="/favicon.png">
   <link rel="stylesheet" href="/assets/style.css">
   <script src="/assets/chart.umd.js" defer></script>
   <script src="/assets/app.js" defer></script>
@@ -12,14 +15,16 @@
 <body>
 <a class="skip" href="#main">Skip to dashboard</a>
 <header class="topbar">
-  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 13h4l3-8 4 14 3-8h4"/></svg></span>Sales Pulse<span class="brand-tag">SHOPIFY</span></a>
+  <a href="/" class="brand"><img class="brand-icon" src="/favicon.png" width="40" height="40" alt="">Sales Pulse<span class="brand-tag">FLIPPER ONE</span></a>
   <span id="connection" class="connection">Connecting…</span>
 </header>
 <main id="main">
-  <div class="page-heading">
-    <div><p class="eyebrow">PRE-ORDERS BY SKU</p><h1>Flipper One Pre-order<span class="heading-dot">.</span></h1><p id="shop-name" class="muted">Four SKUs · tracked separately</p></div>
-    <div class="actions"><label class="sr-only" for="period">Date range</label><select id="period"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option></select></div>
-  </div>
+  <section class="page-heading" aria-labelledby="page-title">
+    <div class="hero-copy"><p class="eyebrow">PRE-ORDER ANALYTICS</p><h1 id="page-title">Flipper One<span>Pre-order dashboard<span class="heading-dot">.</span></span></h1><p id="shop-name" class="muted">Four SKUs · tracked separately</p>
+      <div class="actions"><label for="period">Date range</label><select id="period"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option></select></div>
+    </div>
+    <div class="product-image"><img src="/assets/flipper-one.png" width="540" height="540" fetchpriority="high" alt="Flipper One in its clear limited developer edition display box"></div>
+  </section>
   <div id="notice" class="notice" role="status" hidden></div>
   <section id="setup" class="setup" hidden>
     <span class="step-tag">CONNECTION SETUP</span><h2>Connect your Shopify store</h2>
