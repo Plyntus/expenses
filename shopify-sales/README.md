@@ -4,7 +4,7 @@ Separate service in the expenses repository. It has its own image, password, dat
 
 Configured Coolify resource: `shopify-sales` (`bsx2yfwc7vai3076g1uixf1p`). External address: `https://flipper1.78.46.135.213.sslip.io`. This address resolves to the Hetzner server without buying a domain. HTTPS still depends on successful certificate issuance and renewal from the shared DNS service. Dashboard credentials are kept in Coolify runtime variables, not in this repository.
 
-One Python/FastAPI process polls Shopify GraphQL Admin API every 60 seconds, even with no browser open. SQLite persists only lines matching the four fixed SKUs; the page reads the local data and refreshes every minute. Chart.js is bundled locally. No customer names, emails, addresses or payment details are requested or stored.
+One Python/FastAPI process polls Shopify GraphQL Admin API every 60 seconds, even with no browser open. SQLite persists only lines matching the four fixed SKUs plus aggregate landing-page session counts; the page reads the local data and refreshes every minute. Chart.js is bundled locally. No customer names, emails, addresses or payment details are requested or stored.
 
 ## 1. Shopify connection
 
@@ -58,6 +58,16 @@ The interface is in English and shows net units, original order counts, refunded
 Shopify still returns complete order pages, which can include other products. The service discards non-matching line items before persistence and never stores order headers for orders with no matching SKU. Matching uses SKU, not a mutable product title. On startup, earlier caches are migrated: unrelated lines and empty order headers are removed, while tracked history and sync checkpoints are preserved. The previous product-selection table is retired. A later payment-status migration adds `financial_status` to cached orders; rows without a known status are refreshed by ID before the next incremental sync. This repair does not require rebuilding the entire store history or advancing the checkpoint prematurely.
 
 The first import may take several minutes. The page shows sync status, the last successful update and errors. Old data remains available during Shopify outages. No sample data is presented as live sales.
+
+## Landing-page sessions
+
+The **Landing page sessions** panel reads Shopify Analytics via ShopifyQL for `/pages/flipper-one/`, matching the path with and without its trailing slash. This measures sessions **starting** on that page, not every session that later visits it. It does not filter traffic by SKU or calculate a purchase conversion rate. All traffic is used without an added human/bot filter or URL-parameter grouping.
+
+The same Today / Last 7 days / Last 30 days control selects the inclusive calendar-day range. ShopifyQL uses `TIMESERIES day`, explicit dates and `WITH TIMEZONE` set to the dashboard timezone. The server refreshes the full configured history once a minute, including corrected historical counts. Only aggregate date/session counts are stored; query strings, customer details and individual session identifiers are not fetched or stored.
+
+The existing Shopify app needs `read_reports` and ShopifyQL eligibility (including Level 2 protected-customer-data access). Update the app version and approve new scopes for the installed app as needed. No new credentials or environment variables are required. See [ShopifyQL API requirements](https://shopify.dev/docs/api/admin-graphql/latest/queries/shopifyqlQuery) and [session fields](https://shopify.dev/docs/api/shopifyql/latest/schemas/sessions_and_behavior/sessions).
+
+Analytics polling is independent of order sync; an analytics failure preserves the last good report and does not move the sales checkpoint or prevent new sales imports. Missing/incomplete reports display a dash rather than zero. The panel shows its own update timestamp, timezone, stale status and errors. `/api/traffic?days=7` is authenticated and returns the cached daily series and its sum. Shopify processing may lag the dashboard polling time. URL-parameter segmentation requires a separately specified parameter and is not configured yet.
 
 ## Calculation rules
 

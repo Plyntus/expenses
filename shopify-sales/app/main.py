@@ -13,6 +13,7 @@ from .config import PRODUCT_TITLE, TRACKED_SKUS, Settings
 from .shopify import Shopify
 from .store import Store
 from .sync import Sync
+from .traffic import TrafficSync, dashboard as traffic_dashboard
 
 STATIC = Path(__file__).parent / "static"
 
@@ -22,16 +23,18 @@ def create_app(settings=None, shopify=None, poll=True):
     store = Store(settings.db_path)
     shopify = shopify or Shopify(settings)
     sync = Sync(settings, store, shopify)
+    traffic = TrafficSync(settings, store, shopify)
     failures = OrderedDict()
 
     @asynccontextmanager
     async def lifespan(app):
-        task = asyncio.create_task(sync.run()) if poll else None
+        tasks = [asyncio.create_task(worker.run()) for worker in (sync, traffic)] if poll else []
         try:
             yield
         finally:
-            if task:
+            for task in tasks:
                 task.cancel()
+            for task in tasks:
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
             await shopify.close()
@@ -106,5 +109,9 @@ def create_app(settings=None, shopify=None, poll=True):
             return await asyncio.to_thread(store.dashboard, days, settings.timezone)
         except ValueError:
             raise HTTPException(409, "Shop currency changed; choose a shorter period")
+
+    @app.get("/api/traffic", dependencies=[Depends(authenticate)])
+    async def sessions(days: int = Query(7, ge=1, le=60)):
+        return await asyncio.to_thread(traffic_dashboard, store, settings, days)
 
     return app

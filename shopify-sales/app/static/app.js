@@ -4,7 +4,7 @@ const fmt = new Intl.NumberFormat('en-US');
 const colors = ['#c45100', '#2856a3', '#8052a1', '#68732c'];
 const dashes = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
 const points = ['circle', 'rect', 'triangle', 'rectRot'];
-let state, chartUnits, chartHourly, refreshing = false;
+let state, chartUnits, chartHourly, refreshing = false, refreshAgain = false;
 const dayLabel = date => new Intl.DateTimeFormat('en-US', {day: 'numeric', month: 'short', timeZone: 'UTC'}).format(new Date(date + 'T12:00:00Z'));
 
 async function api(path) {
@@ -98,16 +98,36 @@ function dataView(data) {
   })));
   if (hasData) drawChart(data);
 }
+function trafficView(data) {
+  const days = data ? data.days : Number($('period').value);
+  $('traffic-period').textContent = days === 1 ? 'Today' : `Last ${days} days`;
+  $('traffic-count').textContent = data && data.available ? fmt.format(data.sessions) : '—';
+  let message = 'Waiting for Shopify analytics';
+  if (data && data.last_success) {
+    const time = new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeStyle: 'short', timeZone: data.timezone}).format(new Date(data.last_success));
+    message = `Last updated ${time} · ${data.timezone}`;
+    if (data.stale) message = `Data may be delayed. ${message}`;
+    if (!data.available) message = 'Waiting for the selected date range to refresh';
+  }
+  if (data && data.last_error) message = (data.available ? 'Showing the last successful report. ' : '') + data.last_error;
+  if (!data) message = 'Sessions could not be loaded. Retrying next minute.';
+  $('traffic-status').textContent = message;
+}
 async function refresh() {
-  if (refreshing) return;
+  if (refreshing) { refreshAgain = true; return; }
   refreshing = true;
   try {
     state = await api('/api/status'); statusView(state);
-    dataView(await api('/api/dashboard?days=' + $('period').value));
+    const days = $('period').value;
+    const [sales, traffic] = await Promise.all([api('/api/dashboard?days=' + days), api('/api/traffic?days=' + days).catch(() => null)]);
+    dataView(sales); trafficView(traffic);
   } catch (error) {
     notice(error.message);
     $('connection').textContent = 'Connection lost'; $('connection').className = 'connection';
-  } finally { refreshing = false; }
+  } finally {
+    refreshing = false;
+    if (refreshAgain) { refreshAgain = false; refresh(); }
+  }
 }
 $('period').addEventListener('change', refresh);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
