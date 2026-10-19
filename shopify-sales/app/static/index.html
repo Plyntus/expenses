@@ -32,6 +32,9 @@
     <section class="charts-grid units-only" aria-label="Daily units by SKU">
       <article class="panel"><div class="panel-heading"><div><p class="eyebrow">PRE-ORDER VOLUME</p><h2>Units by SKU</h2></div><span class="badge">PER DAY</span></div><div class="chart-wrap"><canvas id="units-chart" role="img" aria-label="Daily units with a separate series for each SKU. Exact values are available in the table below."></canvas></div></article>
     </section>
+    <section class="charts-grid units-only hourly-section" aria-label="Hourly units over the last 24 hours">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">HOURLY VOLUME</p><h2>Last 24 hours</h2><p id="hourly-window" class="muted hourly-caption">Rolling 60-minute buckets</p></div><span class="badge">PER HOUR</span></div><div class="chart-wrap"><canvas id="hourly-chart" role="img" aria-label="Hourly units over the rolling last 24 hours, with a separate series for each SKU."></canvas></div></article>
+    </section>
     <details class="panel details"><summary>Daily breakdown by SKU</summary><div class="table-scroll"><table><thead><tr><th scope="col">Date</th><th scope="col">SKU</th><th scope="col">Units</th><th scope="col">Orders</th><th scope="col">Authorized</th></tr></thead><tbody id="daily-table"></tbody></table></div></details>
   </div>
   <footer><p id="updated" aria-live="polite">Waiting for the first sync</p><p>Refreshes every 60 seconds · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Units exclude refunded and removed items. Authorized, paid and partially paid pre-orders are included. Test, cancelled, pending, expired and voided orders are excluded. Units are grouped by the original order date. An order containing multiple SKUs is counted once under each SKU.</p></footer>

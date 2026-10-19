@@ -4,7 +4,7 @@ const fmt = new Intl.NumberFormat('en-US');
 const colors = ['#176c53', '#2856a3', '#8052a1', '#9b6616'];
 const dashes = [[], [6, 3], [2, 3], [8, 3, 2, 3]];
 const points = ['circle', 'rect', 'triangle', 'rectRot'];
-let state, chartUnits, refreshing = false;
+let state, chartUnits, chartHourly, refreshing = false;
 const dayLabel = date => new Intl.DateTimeFormat('en-US', {day: 'numeric', month: 'short', timeZone: 'UTC'}).format(new Date(date + 'T12:00:00Z'));
 
 async function api(path) {
@@ -45,11 +45,27 @@ function chartOptions() {
 function drawChart(data) {
   const labels = data.daily.map(d => dayLabel(d.date));
   if (chartUnits) chartUnits.destroy();
-  const datasets = data.skus.map((item, index) => ({label: item.sku, data: item.daily.map(d => d.quantity),
-    borderColor: colors[index], backgroundColor: colors[index], borderDash: dashes[index],
-    pointStyle: points[index], borderWidth: 2, fill: false, tension: 0.15,
-    pointRadius: data.days === 1 ? 5 : 2, pointHoverRadius: 5}));
-  chartUnits = new Chart($('units-chart'), {type: 'line', data: {labels, datasets}, options: chartOptions()});
+  if (chartHourly) chartHourly.destroy();
+  function datasets(skus, key) {
+    return skus.map((item, index) => ({label: item.sku, data: item[key].map(d => d.quantity),
+      borderColor: colors[index], backgroundColor: colors[index], borderDash: dashes[index],
+      pointStyle: points[index], borderWidth: 2, fill: false, tension: 0.15,
+      pointRadius: key === 'daily' && data.days === 1 ? 5 : 2, pointHoverRadius: 5}));
+  }
+  chartUnits = new Chart($('units-chart'), {type: 'line', data: {labels, datasets: datasets(data.skus, 'daily')}, options: chartOptions()});
+  const hourly = data.last_24_hours;
+  const timeFormat = new Intl.DateTimeFormat('en-US', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: hourly.timezone});
+  const fullTimeFormat = new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: hourly.timezone, timeZoneName: 'shortOffset'});
+  const options = chartOptions();
+  options.scales.x.ticks.maxTicksLimit = 12;
+  options.plugins.tooltip.callbacks.title = items => {
+    const hour = hourly.hourly[items[0].dataIndex];
+    return `${fullTimeFormat.format(new Date(hour.start_at))} – ${fullTimeFormat.format(new Date(hour.end_at))}`;
+  };
+  $('hourly-window').textContent = `Rolling 60-minute buckets · ${hourly.timezone}`;
+  chartHourly = new Chart($('hourly-chart'), {type: 'line', data: {
+    labels: hourly.hourly.map(hour => timeFormat.format(new Date(hour.start_at))),
+    datasets: datasets(hourly.skus, 'hourly')}, options});
 }
 function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
 function skuCard(item, hasData, index) {
@@ -69,7 +85,7 @@ function dataView(data) {
   const hasData = Boolean(state.last_success);
   $('sku-cards').replaceChildren(...data.skus.map((item, index) => skuCard(item, hasData, index)));
   $('charts-area').hidden = !hasData;
-  $('daily-table').replaceChildren(...data.daily.flatMap((day, index) => data.skus.map(item => {
+  $('daily-table').replaceChildren(...data.daily.map((day, index) => ({day, index})).reverse().flatMap(({day, index}) => data.skus.map(item => {
     const values = item.daily[index];
     const tr = element('tr');
     [dayLabel(day.date), item.sku, fmt.format(values.quantity), fmt.format(values.orders), fmt.format(values.authorized_orders)]

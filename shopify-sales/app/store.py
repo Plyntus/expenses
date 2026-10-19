@@ -107,6 +107,35 @@ class Store:
         with self.connect() as db:
             db.execute("DELETE FROM orders WHERE created_at < ?", (cutoff,))
 
+    def hourly(self, tz_name, now=None):
+        now = (now or utcnow()).astimezone(timezone.utc)
+        start = now - timedelta(hours=24)
+        intervals = [{"start_at": (start + timedelta(hours=i)).isoformat(),
+                      "end_at": (start + timedelta(hours=i + 1)).isoformat()} for i in range(24)]
+        buckets = {sku: [{"quantity": 0, "orders": set()} for _ in intervals] for sku in TRACKED_SKUS}
+        overall = [set() for _ in intervals]
+        with self.connect() as db:
+            rows = db.execute("""SELECT l.sku, l.quantity, l.order_id, o.created_at
+                FROM lines l JOIN orders o ON o.id=l.order_id
+                WHERE o.eligible=1 AND o.created_at >= ? AND o.created_at < ? AND l.quantity > 0""",
+                (start.isoformat(), now.isoformat())).fetchall()
+        for row in rows:
+            if row["sku"] not in buckets:
+                continue
+            index = int((parse_date(row["created_at"]) - start).total_seconds() // 3600)
+            if not 0 <= index < 24:
+                continue
+            bucket = buckets[row["sku"]][index]
+            bucket["quantity"] += row["quantity"]
+            bucket["orders"].add(row["order_id"])
+            overall[index].add(row["order_id"])
+        series = [{"sku": sku,
+                   "hourly": [{**intervals[i], "quantity": value["quantity"], "orders": len(value["orders"])}
+                              for i, value in enumerate(values)]} for sku, values in buckets.items()]
+        return {"timezone": tz_name, "start_at": start.isoformat(), "end_at": now.isoformat(),
+                "hourly": [{**intervals[i], "quantity": sum(buckets[sku][i]["quantity"] for sku in TRACKED_SKUS),
+                            "orders": len(overall[i])} for i in range(24)], "skus": series}
+
     def dashboard(self, days, tz_name, now=None):
         now = now or utcnow()
         tz = ZoneInfo(tz_name)
@@ -160,4 +189,4 @@ class Store:
                 "totals": {"revenue": float(sum((p["revenue"] for p in buckets.values()), Decimal(0))),
                            "quantity": sum(p["quantity"] for p in buckets.values()), "orders": len(all_orders),
                            "authorized_orders": len(all_authorized_orders)},
-                "daily": daily, "skus": serialized}
+                "daily": daily, "skus": serialized, "last_24_hours": self.hourly(tz_name, now)}

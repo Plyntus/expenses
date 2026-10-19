@@ -10,3 +10,4 @@
 .authorized-note{font-size:11px;color:var(--muted);margin:14px 0 0;overflow-wrap:anywhere}
 
 .charts-grid.units-only{grid-template-columns:minmax(0,1fr)}
+.hourly-section{margin-top:20px}.hourly-caption{font-size:12px;margin-top:8px}

@@ -4,7 +4,7 @@ import json
 import os
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import httpx
@@ -77,6 +77,68 @@ class StoreTests(unittest.TestCase):
         self.store.upsert_orders([order(createdAt="2026-10-18T23:30:00Z")])
         self.assertEqual(self.dashboard(1)["totals"]["orders"], 1)
         self.assertEqual(self.dashboard(1, "UTC")["totals"]["orders"], 0)
+
+    def test_hourly_window_has_24_buckets_and_exact_time_boundaries(self):
+        start = NOW - timedelta(hours=24)
+        samples = [
+            ("start", start, 2, TRACKED_SKUS[0]),
+            ("next-hour", start + timedelta(hours=1), 3, TRACKED_SKUS[1]),
+            ("recent", NOW - timedelta(microseconds=1), 4, TRACKED_SKUS[0]),
+            ("too-old", start - timedelta(microseconds=1), 99, TRACKED_SKUS[0]),
+            ("end", NOW, 99, TRACKED_SKUS[0]),
+            ("future", NOW + timedelta(minutes=1), 99, TRACKED_SKUS[0]),
+        ]
+        self.store.upsert_orders([order(name, createdAt=stamp.isoformat(),
+            lines=[line(name, quantity=quantity, sku=sku)]) for name, stamp, quantity, sku in samples])
+        data = self.store.hourly("Europe/Belgrade", NOW)
+        self.assertEqual(len(data["hourly"]), 24)
+        self.assertEqual([len(s["hourly"]) for s in data["skus"]], [24, 24, 24, 24])
+        self.assertEqual(data["start_at"], start.isoformat())
+        self.assertEqual(data["end_at"], NOW.isoformat())
+        self.assertEqual(sum(b["quantity"] for b in data["hourly"]), 9)
+        self.assertEqual(data["hourly"][0]["quantity"], 2)
+        self.assertEqual(data["hourly"][1]["quantity"], 3)
+        self.assertEqual(data["hourly"][-1]["quantity"], 4)
+        self.assertEqual(sum(b["quantity"] for b in data["skus"][0]["hourly"]), 6)
+        self.assertEqual(sum(b["quantity"] for b in data["skus"][1]["hourly"]), 3)
+        self.assertTrue(all(b["quantity"] == 0 for b in data["skus"][2]["hourly"]))
+
+    def test_hourly_uses_existing_eligibility_and_distinct_order_rules(self):
+        self.store.upsert_orders([
+            order("auth", displayFinancialStatus="AUTHORIZED", lines=[
+                line("a", quantity=2), line("b", quantity=3), line("c", quantity=1, sku=TRACKED_SKUS[1])]),
+            order("void", displayFinancialStatus="VOIDED"),
+            order("cancel", cancelledAt="2026-10-19T11:00:00Z"),
+            order("test", test=True),
+            order("refunded", displayFinancialStatus="REFUNDED", lines=[line("refund", quantity=0)]),
+        ])
+        data = self.store.hourly("UTC", NOW)
+        self.assertEqual(sum(b["quantity"] for b in data["hourly"]), 6)
+        self.assertEqual(sum(b["orders"] for b in data["hourly"]), 1)
+        self.assertEqual(sum(b["orders"] for b in data["skus"][0]["hourly"]), 1)
+        self.assertEqual(sum(b["quantity"] for b in data["skus"][0]["hourly"]), 5)
+
+    def test_last_24_hours_is_independent_of_daily_period(self):
+        self.store.upsert_orders([order(createdAt=(NOW - timedelta(hours=20)).isoformat())])
+        today = self.store.dashboard(1, "UTC", NOW)
+        week = self.store.dashboard(7, "UTC", NOW)
+        self.assertEqual(today["totals"]["quantity"], 0)
+        self.assertEqual(week["totals"]["quantity"], 2)
+        self.assertEqual(today["last_24_hours"], week["last_24_hours"])
+        self.assertEqual(sum(b["quantity"] for b in today["last_24_hours"]["hourly"]), 2)
+
+    def test_hourly_window_handles_daylight_saving_without_merging_hours(self):
+        now = datetime(2026, 10, 25, 4, 30, tzinfo=timezone.utc)
+        self.store.upsert_orders([
+            order("first-0230", createdAt="2026-10-25T00:30:00Z"),
+            order("second-0230", createdAt="2026-10-25T01:30:00Z"),
+        ])
+        data = self.store.hourly("Europe/Belgrade", now)
+        nonempty = [b for b in data["hourly"] if b["quantity"]]
+        self.assertEqual(len(data["hourly"]), 24)
+        self.assertEqual(len(nonempty), 2)
+        self.assertNotEqual(nonempty[0]["start_at"], nonempty[1]["start_at"])
+        self.assertEqual(sum(b["quantity"] for b in nonempty), 4)
 
     def test_migration_removes_untracked_history_but_keeps_tracked_data_and_checkpoint(self):
         self.store.upsert_orders([order()])
@@ -213,6 +275,8 @@ class ApiTests(unittest.TestCase):
         data = self.client.get("/api/dashboard", auth=self.auth).json()
         self.assertEqual([s["sku"] for s in data["skus"]], list(TRACKED_SKUS))
         self.assertTrue(all(s["quantity"] == 0 for s in data["skus"]))
+        self.assertEqual(len(data["last_24_hours"]["hourly"]), 24)
+        self.assertEqual(len(data["last_24_hours"]["skus"]), 4)
         self.assertEqual(self.client.get("/api/products", auth=self.auth).status_code, 404)
         self.assertEqual(self.client.put("/api/products", json={"products": []}, auth=self.auth,
                                          headers={"X-Sales-Request": "1"}).status_code, 404)
