@@ -14,7 +14,6 @@ from .shopify import Shopify
 from .store import Store
 from .sync import Sync
 from .traffic import TrafficSync, dashboard as traffic_dashboard
-from .acquisition import AcquisitionSync, dashboard as acquisition_dashboard
 
 STATIC = Path(__file__).parent / "static"
 
@@ -25,12 +24,11 @@ def create_app(settings=None, shopify=None, poll=True):
     shopify = shopify or Shopify(settings)
     sync = Sync(settings, store, shopify)
     traffic = TrafficSync(settings, store, shopify)
-    acquisition = AcquisitionSync(settings, store, shopify)
     failures = OrderedDict()
 
     @asynccontextmanager
     async def lifespan(app):
-        tasks = [asyncio.create_task(worker.run()) for worker in (sync, traffic, acquisition)] if poll else []
+        tasks = [asyncio.create_task(worker.run()) for worker in (sync, traffic)] if poll else []
         try:
             yield
         finally:
@@ -115,9 +113,5 @@ def create_app(settings=None, shopify=None, poll=True):
     @app.get("/api/traffic", dependencies=[Depends(authenticate)])
     async def sessions(days: int = Query(7, ge=1, le=60)):
         return await asyncio.to_thread(traffic_dashboard, store, settings, days)
-
-    @app.get("/api/acquisition", dependencies=[Depends(authenticate)])
-    async def source_charts(days: int = Query(7, ge=1, le=60)):
-        return await asyncio.to_thread(acquisition_dashboard, store, settings, days)
 
     return app
