@@ -50,7 +50,7 @@ class StoreTests(unittest.TestCase):
         self.store.upsert_orders([item])
         self.store.upsert_orders([item])
         totals = self.dashboard()["totals"]
-        self.assertEqual(totals, {"revenue": 19.0, "quantity": 3, "orders": 1})
+        self.assertEqual(totals, {"revenue": 19.0, "quantity": 3, "orders": 1, "authorized_orders": 0})
         self.assertEqual(len(self.dashboard()["daily"]), 7)
         skus = self.dashboard()["skus"]
         self.assertEqual([s["sku"] for s in skus], list(TRACKED_SKUS))
@@ -61,7 +61,7 @@ class StoreTests(unittest.TestCase):
     def test_partial_then_full_refund_and_cancel_replace_original(self):
         self.store.upsert_orders([order()])
         self.store.upsert_orders([order(lines=[line(amount="9.45", quantity=1)], displayFinancialStatus="PARTIALLY_REFUNDED")])
-        self.assertEqual(self.dashboard()["totals"], {"revenue": 9.45, "quantity": 1, "orders": 1})
+        self.assertEqual(self.dashboard()["totals"], {"revenue": 9.45, "quantity": 1, "orders": 1, "authorized_orders": 0})
         self.store.upsert_orders([order(lines=[line(amount="0", quantity=0)], displayFinancialStatus="REFUNDED")])
         self.assertEqual(self.dashboard()["totals"]["quantity"], 0)
         self.store.upsert_orders([order(cancelledAt="2026-10-19T11:00:00Z")])
@@ -69,7 +69,8 @@ class StoreTests(unittest.TestCase):
 
     def test_unpaid_cancelled_test_orders_are_excluded(self):
         self.store.upsert_orders([order("test", test=True), order("pending", displayFinancialStatus="PENDING"),
-                                  order("partial", displayFinancialStatus="PARTIALLY_PAID"), order("cancelled", cancelledAt="2026-10-19T11:00:00Z")])
+                                  order("expired", displayFinancialStatus="EXPIRED"), order("voided", displayFinancialStatus="VOIDED"),
+                                  order("cancelled", cancelledAt="2026-10-19T11:00:00Z")])
         self.assertEqual(self.dashboard()["totals"]["orders"], 0)
 
     def test_timezone_and_period_boundaries(self):
@@ -83,7 +84,7 @@ class StoreTests(unittest.TestCase):
         with self.store.connect() as db:
             db.execute("CREATE TABLE products (id TEXT PRIMARY KEY, title TEXT)")
             db.execute("INSERT INTO products VALUES ('old-product', 'Untracked product')")
-            db.execute("INSERT INTO orders VALUES ('untracked-order','2026-10-19T10:00:00+00:00','2026-10-19T10:01:00+00:00',1)")
+            db.execute("INSERT INTO orders (id,created_at,updated_at,eligible) VALUES ('untracked-order','2026-10-19T10:00:00+00:00','2026-10-19T10:01:00+00:00',1)")
             db.execute("INSERT INTO lines VALUES ('untracked-line','untracked-order','other','Other','OTHER-SKU',5,'5000','USD')")
             db.execute("INSERT INTO lines VALUES ('mixed-line','order-1','other','Other','OTHER-SKU',5,'5000','USD')")
         reopened = Store(self.store.path)
@@ -130,6 +131,35 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(item["revenue"], 37.8)
         self.assertEqual(item["orders"], 1)
         self.assertEqual(item["daily"][-1]["orders"], 1)
+
+    def test_authorized_preorders_are_counted_separately_from_paid(self):
+        self.store.upsert_orders([
+            order("auth", displayFinancialStatus="AUTHORIZED", lines=[line("auth-line", amount="20.00", quantity=1)]),
+            order("paid", lines=[line("paid-line", amount="20.00", quantity=1)]),
+            order("partial", displayFinancialStatus="PARTIALLY_PAID", lines=[line("partial-line", amount="20.00", quantity=1)]),
+        ])
+        item = self.dashboard()["skus"][0]
+        self.assertEqual(item["orders"], 3)
+        self.assertEqual(item["quantity"], 3)
+        self.assertEqual(item["revenue"], 60)
+        self.assertEqual(item["authorized_orders"], 1)
+        self.assertEqual(item["daily"][-1]["authorized_orders"], 1)
+
+    def test_authorization_to_paid_and_voided_replace_existing_counts(self):
+        self.store.upsert_orders([order(displayFinancialStatus="AUTHORIZED")])
+        self.assertEqual(self.dashboard()["skus"][0]["authorized_orders"], 1)
+        self.store.upsert_orders([order(displayFinancialStatus="PAID")])
+        self.assertEqual(self.dashboard()["skus"][0]["orders"], 1)
+        self.assertEqual(self.dashboard()["skus"][0]["authorized_orders"], 0)
+        self.store.upsert_orders([order(displayFinancialStatus="VOIDED")])
+        self.assertEqual(self.dashboard()["skus"][0]["orders"], 0)
+
+    def test_authorized_order_with_two_skus_counts_once_in_total(self):
+        self.store.upsert_orders([order(displayFinancialStatus="AUTHORIZED", lines=[
+            line("a", sku=TRACKED_SKUS[0]), line("b", sku=TRACKED_SKUS[1])])])
+        data = self.dashboard()
+        self.assertEqual(data["totals"]["authorized_orders"], 1)
+        self.assertEqual([s["authorized_orders"] for s in data["skus"]], [1, 1, 0, 0])
 
     def test_invalid_page_rolls_back(self):
         self.store.upsert_orders([order()])
@@ -200,6 +230,65 @@ class ApiTests(unittest.TestCase):
 
 
 class ShopifyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_status_repair_refreshes_unchanged_cached_orders_and_retries_safely(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp + "/db.sqlite3")
+            store.upsert_orders([order()])
+            with store.connect() as db:
+                db.execute("UPDATE orders SET financial_status='UNKNOWN', eligible=0")
+            checkpoint = "2026-10-19T11:00:00+00:00"
+            store.set("checkpoint", checkpoint)
+            store.set("import_history_days", 30)
+
+            class FakeShopify:
+                fail = True
+                requested_ids = []
+
+                async def orders_by_ids(self, ids):
+                    self.requested_ids.append(ids)
+                    if self.fail:
+                        raise ShopifyError("temporary repair failure")
+                    return [order(displayFinancialStatus="AUTHORIZED")]
+
+                async def orders(self, search):
+                    yield []
+
+            fake = FakeShopify()
+            sync = Sync(Settings("ros", "password", shop="test.myshopify.com", access_token="test"), store, fake)
+            with patch("app.sync.utcnow", return_value=NOW):
+                await sync.once()
+                self.assertEqual(store.get("checkpoint"), checkpoint)
+                self.assertEqual(store.orders_needing_status(), ["order-1"])
+                fake.fail = False
+                await sync.once()
+            self.assertEqual(fake.requested_ids, [["order-1"], ["order-1"]])
+            self.assertEqual(store.orders_needing_status(), [])
+            self.assertEqual(store.get("checkpoint"), NOW.isoformat())
+            item = store.dashboard(7, "UTC", NOW)["skus"][0]
+            self.assertEqual(item["orders"], 1)
+            self.assertEqual(item["authorized_orders"], 1)
+            self.assertIsNone(store.get("last_error"))
+
+    async def test_refetch_by_id_paginates_lines_and_handles_deleted_orders(self):
+        first = order(displayFinancialStatus="AUTHORIZED")
+        first["lineItems"]["pageInfo"] = {"hasNextPage": True, "endCursor": "next-line"}
+
+        def handler(request):
+            body = json.loads(request.content)
+            if "CachedOrders" in body["query"]:
+                return httpx.Response(200, json={"data": {"nodes": [copy.deepcopy(first), None]}})
+            return httpx.Response(200, json={"data": {"order": {"lineItems": {
+                "nodes": [line("extra", sku=TRACKED_SKUS[1])],
+                "pageInfo": {"hasNextPage": False, "endCursor": None}}}}})
+
+        api = Shopify(Settings("ros", "password", shop="test.myshopify.com", access_token="test"),
+                      httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        rows = await api.orders_by_ids(["order-1", "deleted"])
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(len(rows[0]["lineItems"]["nodes"]), 2)
+        self.assertEqual(rows[0]["displayFinancialStatus"], "AUTHORIZED")
+        await api.close()
+
     async def test_token_cached_and_refreshed_before_expiry(self):
         calls = []
 

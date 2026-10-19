@@ -20,6 +20,13 @@ class Sync:
         started = utcnow()
         self.store.set("last_attempt", started.isoformat())
         try:
+            # Repair existing cache rows after adding payment-status tracking, even if
+            # Shopify hasn't changed those orders since the persisted checkpoint.
+            while ids := self.store.orders_needing_status():
+                orders = await self.shopify.orders_by_ids(ids)
+                self.store.upsert_orders(orders)
+                returned = {order["id"] for order in orders}
+                self.store.remove_unavailable_orders(set(ids) - returned)
             cutoff = started - timedelta(days=self.settings.history_days)
             checkpoint = self.store.get("checkpoint")
             if self.settings.history_days > self.store.get("import_history_days", 0):

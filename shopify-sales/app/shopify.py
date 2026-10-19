@@ -22,6 +22,9 @@ LINES_QUERY = """query Lines($id: ID!, $after: String!) {
         nodes { %s } pageInfo { hasNextPage endCursor }
     } }
 }""" % LINE_FIELDS
+ORDERS_BY_ID_QUERY = """query CachedOrders($ids: [ID!]!) {
+    nodes(ids: $ids) { ... on Order { %s } }
+}""" % ORDER_FIELDS
 
 
 class Shopify:
@@ -94,20 +97,30 @@ class Shopify:
                     await asyncio.sleep(2 ** attempt)
             raise ShopifyError("Shopify temporarily unavailable or rate limited; retrying next poll")
 
+    async def complete_lines(self, order):
+        lines = order["lineItems"]
+        page = lines["pageInfo"]
+        while page["hasNextPage"]:
+            data = await self.graphql(LINES_QUERY, {"id": order["id"], "after": page["endCursor"]})
+            if data.get("order") is None:
+                raise ShopifyError("An order became unavailable during sync; retrying next poll")
+            extra = data["order"]["lineItems"]
+            lines["nodes"].extend(extra["nodes"])
+            page = extra["pageInfo"]
+
+    async def orders_by_ids(self, ids):
+        data = await self.graphql(ORDERS_BY_ID_QUERY, {"ids": ids})
+        orders = [node for node in data["nodes"] if node is not None]
+        for order in orders:
+            await self.complete_lines(order)
+        return orders
+
     async def orders(self, search):
         after = None
         while True:
             connection = (await self.graphql(ORDERS_QUERY, {"query": search, "after": after}))["orders"]
             for order in connection["nodes"]:
-                lines = order["lineItems"]
-                page = lines["pageInfo"]
-                while page["hasNextPage"]:
-                    data = await self.graphql(LINES_QUERY, {"id": order["id"], "after": page["endCursor"]})
-                    if data.get("order") is None:
-                        raise ShopifyError("An order became unavailable during sync; retrying next poll")
-                    extra = data["order"]["lineItems"]
-                    lines["nodes"].extend(extra["nodes"])
-                    page = extra["pageInfo"]
+                await self.complete_lines(order)
             yield connection["nodes"]
             if not connection["pageInfo"]["hasNextPage"]:
                 break

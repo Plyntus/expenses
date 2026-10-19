@@ -61,13 +61,14 @@ function skuCard(item, currency, hasData, index) {
   const card = element('article', `sku-card sku-color-${index}`);
   card.dataset.sku = item.sku;
   const heading = element('h2', 'sku-name', item.sku);
-  const label = element('p', 'muted', 'Выручка');
+  const label = element('p', 'muted', 'Сумма заказов');
   const revenue = element('strong', 'sku-revenue', hasData ? money(item.revenue, currency) : '—');
   const metrics = element('dl', 'sku-metrics');
-  for (const [name, value] of [['Продано единиц', item.quantity], ['Заказы', item.orders]]) {
+  for (const [name, value] of [['Единиц в заказах', item.quantity], ['Заказы', item.orders]]) {
     const group = element('div'); group.append(element('dt', '', name), element('dd', '', hasData ? fmt.format(value) : '—')); metrics.append(group);
   }
-  card.append(heading, label, revenue, metrics);
+  const authorized = element('p', 'authorized-note', `Из них с авторизацией: ${hasData ? fmt.format(item.authorized_orders) : '—'}`);
+  card.append(heading, label, revenue, metrics, authorized);
   return card;
 }
 function dataView(data) {
@@ -78,7 +79,7 @@ function dataView(data) {
   $('daily-table').replaceChildren(...data.daily.flatMap((day, index) => data.skus.map(item => {
     const values = item.daily[index];
     const tr = element('tr');
-    [dayLabel(day.date), item.sku, money(values.revenue, data.currency), fmt.format(values.quantity), fmt.format(values.orders)]
+    [dayLabel(day.date), item.sku, money(values.revenue, data.currency), fmt.format(values.quantity), fmt.format(values.orders), fmt.format(values.authorized_orders)]
       .forEach(v => tr.append(element('td', '', v)));
     return tr;
   })));

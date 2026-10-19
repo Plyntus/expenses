@@ -30,12 +30,12 @@
   <section id="sku-cards" class="sku-cards" aria-label="Показатели каждого SKU"></section>
   <div id="charts-area" hidden>
     <section class="charts-grid" aria-label="Динамика продаж по SKU">
-      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">ДИНАМИКА</p><h2>Выручка по SKU</h2></div><span id="currency" class="badge"></span></div><div class="chart-wrap"><canvas id="revenue-chart" role="img" aria-label="Выручка по дням: отдельная серия для каждого SKU. Точные значения в таблице ниже."></canvas></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">ДИНАМИКА</p><h2>Сумма заказов по SKU</h2></div><span id="currency" class="badge"></span></div><div class="chart-wrap"><canvas id="revenue-chart" role="img" aria-label="Сумма заказов по дням: отдельная серия для каждого SKU. Точные значения в таблице ниже."></canvas></div></article>
       <article class="panel"><div class="panel-heading"><div><p class="eyebrow">ОБЪЁМ ПРОДАЖ</p><h2>Единицы по SKU</h2></div><span class="badge">В ДЕНЬ</span></div><div class="chart-wrap"><canvas id="units-chart" role="img" aria-label="Проданные единицы по дням: отдельная серия для каждого SKU. Точные значения в таблице ниже."></canvas></div></article>
     </section>
-    <details class="panel details"><summary>Данные по дням и SKU</summary><div class="table-scroll"><table><thead><tr><th scope="col">Дата</th><th scope="col">SKU</th><th scope="col">Выручка</th><th scope="col">Единицы</th><th scope="col">Заказы</th></tr></thead><tbody id="daily-table"></tbody></table></div></details>
+    <details class="panel details"><summary>Данные по дням и SKU</summary><div class="table-scroll"><table><thead><tr><th scope="col">Дата</th><th scope="col">SKU</th><th scope="col">Сумма заказов</th><th scope="col">Единицы</th><th scope="col">Заказы</th><th scope="col">Авторизовано</th></tr></thead><tbody id="daily-table"></tbody></table></div></details>
   </div>
-  <footer><p id="updated" aria-live="polite">Ожидание первой синхронизации</p><p>Опрос каждые 60 секунд · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Без доставки и налогов. Отменённые, тестовые и неоплаченные заказы исключены. Возвраты корректируют день исходного заказа; возвраты без привязки к товару в сумму не входят. Заказ с несколькими SKU учитывается в каждом из них.</p></footer>
+  <footer><p id="updated" aria-live="polite">Ожидание первой синхронизации</p><p>Опрос каждые 60 секунд · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Сумма заказов после скидок, без доставки и налогов. Включены авторизованные, оплаченные и частично оплаченные предзаказы. Авторизация означает резерв средств, а не их списание. Тестовые, отменённые, ожидающие оплаты, просроченные и аннулированные заказы исключены. Возвраты корректируют день исходного заказа; возвраты без привязки к товару в сумму не входят. Заказ с несколькими SKU учитывается в каждом из них.</p></footer>
 </main>
 </body>
 </html>
