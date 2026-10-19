@@ -19,8 +19,8 @@ class TrafficTests(unittest.IsolatedAsyncioTestCase):
         self.settings = Settings('test', 'password', shop='test.myshopify.com', access_token='test')
         labels = dates(30, self.settings.timezone, NOW)
         self.result = {'shopifyqlQuery': {'parseErrors': [], 'tableData': {
-            'columns': [{'name': 'day'}, {'name': 'sessions'}],
-            'rows': [{'day': day, 'sessions': str(index)} for index, day in enumerate(labels)]}}}
+            'columns': [{'name': 'day'}, {'name': 'utm_medium'}, {'name': 'sessions'}],
+            'rows': [{'day': day, 'utm_medium': None, 'sessions': str(index)} for index, day in enumerate(labels)]}}}
         owner = self
 
         class FakeShopify:
@@ -46,12 +46,16 @@ class TrafficTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("('/pages/flipper-one', '/pages/flipper-one/')", query)
         self.assertIn("WITH TIMEZONE 'Europe/Belgrade'", query)
         self.assertIn('SINCE 2026-09-20 UNTIL 2026-10-19', query)
+        self.assertIn('GROUP BY utm_medium', query)
         for count in (1, 7, 30):
             result = dashboard(self.store, self.settings, count, NOW)
             self.assertTrue(result['available'])
             self.assertFalse(result['stale'])
             self.assertEqual(result['sessions'], sum(range(30-count, 30)))
             self.assertEqual(len(result['daily']), count)
+            self.assertTrue(result['breakdown_available'])
+            self.assertEqual(result['email_sessions'], 0)
+            self.assertEqual(result['other_sessions'], result['sessions'])
         self.assertEqual(dashboard(self.store, self.settings, 30, NOW)['daily'][0]['sessions'], 0)
 
     async def test_errors_keep_last_report_and_do_not_change_sales_checkpoint(self):
@@ -72,8 +76,8 @@ class TrafficTests(unittest.IsolatedAsyncioTestCase):
         original = copy.deepcopy(self.result)
         before = self.store.get('traffic_data')
         invalid = [[], original['shopifyqlQuery']['tableData']['rows'][:-1],
-                   [{'day': '2099-01-01', 'sessions': '1'}], [{'day': '2026-10-19', 'sessions': '-1'}],
-                   [{'day': '2026-10-19', 'sessions': 'not-a-count'}]]
+                   [{'day': '2099-01-01', 'utm_medium': None, 'sessions': '1'}], [{'day': '2026-10-19', 'utm_medium': None, 'sessions': '-1'}],
+                   [{'day': '2026-10-19', 'utm_medium': None, 'sessions': 'not-a-count'}]]
         for rows in invalid:
             self.result = copy.deepcopy(original)
             self.result['shopifyqlQuery']['tableData']['rows'] = rows
@@ -109,3 +113,45 @@ class TrafficTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(result['available'])
         self.assertTrue(result['stale'])
         self.assertEqual(result['last_success'], NOW.isoformat())
+
+    async def test_email_other_and_missing_tags_partition_each_date_and_period(self):
+        rows = self.result['shopifyqlQuery']['tableData']['rows']
+        rows.extend([{'day':'2026-10-19', 'utm_medium':medium, 'sessions':str(count)}
+                     for medium, count in [('email', 10), ('cpc', 3), ('', 2), ('Email', 4)]])
+        await self.run_sync()
+        result = dashboard(self.store, self.settings, 1, NOW)
+        self.assertEqual(result['email_sessions'], 10)
+        self.assertEqual(result['other_sessions'], 29 + 3 + 2 + 4)
+        for count in (1, 7, 30):
+            result = dashboard(self.store, self.settings, count, NOW)
+            self.assertEqual(result['sessions'], result['email_sessions'] + result['other_sessions'])
+            for row in result['daily']:
+                self.assertEqual(row['sessions'], row['email_sessions'] + row['other_sessions'])
+
+    async def test_legacy_cache_retains_total_without_inventing_segment_zeroes(self):
+        await self.run_sync()
+        cached = self.store.get('traffic_data')
+        cached.pop('segmentation')
+        for row in cached['daily']:
+            row.pop('email_sessions')
+            row.pop('other_sessions')
+        self.store.set('traffic_data', cached)
+        result = dashboard(self.store, self.settings, 7, NOW)
+        self.assertTrue(result['available'])
+        self.assertFalse(result['breakdown_available'])
+        self.assertIsNone(result['email_sessions'])
+        self.assertIsNone(result['other_sessions'])
+        await self.run_sync()
+        self.assertTrue(dashboard(self.store, self.settings, 7, NOW)['breakdown_available'])
+
+    async def test_duplicate_groups_and_truncated_reports_preserve_previous_counts(self):
+        await self.run_sync()
+        cached = self.store.get('traffic_data')
+        rows = self.result['shopifyqlQuery']['tableData']['rows']
+        rows.append(copy.deepcopy(rows[-1]))
+        await self.run_sync()
+        self.assertEqual(self.store.get('traffic_data'), cached)
+        rows.pop()
+        with patch('app.traffic.ROW_LIMIT', 30):
+            await self.run_sync()
+        self.assertEqual(self.store.get('traffic_data'), cached)

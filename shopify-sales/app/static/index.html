@@ -33,8 +33,12 @@
     <p class="muted">Your four SKUs are already configured. Their history will load automatically once connected.</p>
   </section>
   <section class="panel traffic-panel" aria-labelledby="traffic-title">
-    <div class="traffic-copy"><p class="eyebrow">SHOPIFY ANALYTICS</p><h2 id="traffic-title">Landing page sessions</h2><p class="traffic-path"><code>/pages/flipper-one/</code></p><p class="muted">Sessions starting on this page</p><p id="traffic-status" class="traffic-status" role="status">Waiting for Shopify analytics</p></div>
-    <div class="traffic-metric"><strong id="traffic-count">—</strong><span id="traffic-period" class="muted">Last 7 days</span></div>
+    <div class="traffic-copy"><p class="eyebrow">SHOPIFY ANALYTICS</p><h2 id="traffic-title">Landing page sessions</h2><p class="traffic-path"><code>/pages/flipper-one/</code></p><p class="muted">Sessions starting on this page · <span id="traffic-period">Last 7 days</span></p><p id="traffic-status" class="traffic-status" role="status">Waiting for Shopify analytics</p></div>
+    <div class="traffic-values" aria-label="Sessions by UTM medium">
+      <div class="traffic-metric"><span class="traffic-label">Total</span><strong id="traffic-count">—</strong><span class="traffic-rule">All sessions</span></div>
+      <div class="traffic-metric"><span class="traffic-label">Email</span><strong id="traffic-email">—</strong><span class="traffic-rule">utm_medium = email</span></div>
+      <div class="traffic-metric"><span class="traffic-label">Other</span><strong id="traffic-other">—</strong><span class="traffic-rule">Other + untagged</span></div>
+    </div>
   </section>
   <section id="sku-cards" class="sku-cards" aria-label="Metrics by SKU"></section>
   <div id="charts-area" hidden>

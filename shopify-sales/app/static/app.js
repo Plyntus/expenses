@@ -102,12 +102,15 @@ function trafficView(data) {
   const days = data ? data.days : Number($('period').value);
   $('traffic-period').textContent = days === 1 ? 'Today' : `Last ${days} days`;
   $('traffic-count').textContent = data && data.available ? fmt.format(data.sessions) : '—';
+  $('traffic-email').textContent = data && data.breakdown_available ? fmt.format(data.email_sessions) : '—';
+  $('traffic-other').textContent = data && data.breakdown_available ? fmt.format(data.other_sessions) : '—';
   let message = 'Waiting for Shopify analytics';
   if (data && data.last_success) {
     const time = new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeStyle: 'short', timeZone: data.timezone}).format(new Date(data.last_success));
     message = `Last updated ${time} · ${data.timezone}`;
     if (data.stale) message = `Data may be delayed. ${message}`;
     if (!data.available) message = 'Waiting for the selected date range to refresh';
+    else if (!data.breakdown_available) message = 'Loading the Email / Other breakdown. ' + message;
   }
   if (data && data.last_error) message = (data.available ? 'Showing the last successful report. ' : '') + data.last_error;
   if (!data) message = 'Sessions could not be loaded. Retrying next minute.';
