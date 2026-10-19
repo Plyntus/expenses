@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Sales Pulse · Shopify</title>
+  <link rel="stylesheet" href="/assets/style.css">
+  <script src="/assets/chart.umd.js" defer></script>
+  <script src="/assets/app.js" defer></script>
+</head>
+<body>
+<a class="skip" href="#main">К показателям</a>
+<header class="topbar">
+  <a href="/" class="brand"><span class="brand-icon" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 13h4l3-8 4 14 3-8h4"/></svg></span>Sales Pulse<span class="brand-tag">SHOPIFY</span></a>
+  <span id="connection" class="connection">Подключение…</span>
+</header>
+<main id="main">
+  <div class="page-heading">
+    <div><p class="eyebrow">ОБЗОР МАГАЗИНА</p><h1>Продажи в деталях<span class="heading-dot">.</span></h1><p id="shop-name" class="muted">Свежие цифры по выбранным товарам</p></div>
+    <div class="actions"><label class="sr-only" for="period">Период</label><select id="period"><option value="1">Сегодня</option><option value="7" selected>7 дней</option><option value="30">30 дней</option></select><button id="manage" class="primary" type="button">Выбрать товары <span aria-hidden="true">↗</span></button></div>
+  </div>
+  <div id="notice" class="notice" role="status" hidden></div>
+  <section id="setup" class="setup" hidden>
+    <span class="step-tag">НАСТРОЙКА ПОДКЛЮЧЕНИЯ</span><h2>Подключите свой Shopify</h2>
+    <p>Создайте приложение в Shopify Dev Dashboard, выдайте права <code>read_orders</code> и <code>read_products</code> и установите его в магазин той же организации.</p>
+    <p>В переменных окружения этого приложения в Coolify укажите <code>SHOPIFY_SHOP</code>, <code>SHOPIFY_CLIENT_ID</code> и <code>SHOPIFY_CLIENT_SECRET</code>, затем перезапустите приложение.</p>
+    <p class="muted">Секреты хранятся на сервере. После подключения здесь появится выбор товаров.</p>
+  </section>
+  <section class="kpis" aria-label="Итоги периода">
+    <article class="kpi"><p class="kpi-label">Выручка по товарам <span aria-hidden="true">↗</span></p><strong id="revenue">—</strong><p class="muted">После скидок и товарных возвратов</p></article>
+    <article class="kpi"><p class="kpi-label">Продано единиц <span aria-hidden="true">▤</span></p><strong id="quantity">—</strong><p class="muted">За вычетом возвращённых единиц</p></article>
+    <article class="kpi"><p class="kpi-label">Заказы с этими товарами <span aria-hidden="true">⌗</span></p><strong id="orders">—</strong><p class="muted">Только оплаченные заказы</p></article>
+  </section>
+  <section id="empty" class="empty" hidden><h2>Начнём с ваших товаров</h2><p class="muted">Выберите товары, продажи которых хотите видеть. Графики обновляются автоматически каждую минуту.</p><button id="empty-manage" class="primary" type="button">Выбрать товары</button></section>
+  <div id="charts-area" hidden>
+    <section class="charts-grid" aria-label="Динамика продаж">
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">ДИНАМИКА</p><h2>Выручка по дням</h2></div><span id="currency" class="badge"></span></div><div class="chart-wrap"><canvas id="revenue-chart" role="img" aria-label="Выручка по дням. Точные значения в таблице ниже."></canvas></div></article>
+      <article class="panel"><div class="panel-heading"><div><p class="eyebrow">ОБЪЁМ ПРОДАЖ</p><h2>Единицы и заказы</h2></div><span class="badge">В ДЕНЬ</span></div><div class="chart-wrap"><canvas id="units-chart" role="img" aria-label="Проданные единицы и заказы по дням. Точные значения в таблице ниже."></canvas></div></article>
+    </section>
+    <section class="panel product-panel"><div class="panel-heading"><div><p class="eyebrow">ВАШ АССОРТИМЕНТ</p><h2>Результаты по товарам</h2></div><span id="product-count" class="badge"></span></div><div id="product-list" class="product-list"></div></section>
+    <details class="panel details"><summary>Данные по дням</summary><div class="table-scroll"><table><thead><tr><th scope="col">Дата</th><th scope="col">Выручка</th><th scope="col">Единицы</th><th scope="col">Заказы</th></tr></thead><tbody id="daily-table"></tbody></table></div></details>
+  </div>
+  <footer><p id="updated" aria-live="polite">Ожидание первой синхронизации</p><p>Опрос каждые 60 секунд · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Без доставки и налогов. Отменённые, тестовые и неоплаченные заказы исключены. Возвраты корректируют день исходного заказа; возвраты без привязки к товару в сумму не входят.</p></footer>
+</main>
+<dialog id="product-dialog" aria-labelledby="dialog-title">
+  <div class="dialog-header"><div><p class="eyebrow">НАСТРОЙКА ОБЗОРА</p><h2 id="dialog-title">Отслеживаемые товары</h2></div><button id="close-dialog" class="icon-button" aria-label="Закрыть" type="button">×</button></div>
+  <p class="muted">Выберите до 100 товаров. Варианты одного товара считаются вместе.</p>
+  <form id="search-form"><label for="search">Найти товар по названию</label><div class="search-row"><input id="search" type="search" placeholder="Начните с названия товара" maxlength="100" autocomplete="off"><button class="secondary" type="submit">Найти</button></div></form>
+  <p id="catalog-message" class="muted" aria-live="polite"></p><div id="catalog" class="catalog"></div><button id="more-products" class="secondary" type="button" hidden>Показать ещё</button>
+  <p id="selection-count" class="muted"></p><p id="dialog-error" class="error" role="alert" hidden></p><div class="dialog-footer"><button id="cancel-dialog" class="secondary" type="button">Отмена</button><button id="save-products" class="primary" type="button">Сохранить выбор</button></div>
+</dialog>
+</body>
+</html>

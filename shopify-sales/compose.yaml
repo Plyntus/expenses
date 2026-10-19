@@ -1,0 +1,23 @@
+services:
+  shopify-sales:
+    build: .
+    restart: unless-stopped
+    environment:
+      DASHBOARD_USERNAME: ${DASHBOARD_USERNAME:?Set DASHBOARD_USERNAME}
+      DASHBOARD_PASSWORD: ${DASHBOARD_PASSWORD:?Set a unique password of at least 16 characters}
+      SHOPIFY_SHOP: ${SHOPIFY_SHOP:-flipper-zero.myshopify.com}
+      SHOPIFY_CLIENT_ID: ${SHOPIFY_CLIENT_ID:-}
+      SHOPIFY_CLIENT_SECRET: ${SHOPIFY_CLIENT_SECRET:-}
+      SHOPIFY_ACCESS_TOKEN: ${SHOPIFY_ACCESS_TOKEN:-}
+      SHOPIFY_API_VERSION: ${SHOPIFY_API_VERSION:-2026-10}
+      DASHBOARD_TIMEZONE: ${DASHBOARD_TIMEZONE:-Europe/Belgrade}
+      HISTORY_DAYS: ${HISTORY_DAYS:-30}
+      POLL_SECONDS: ${POLL_SECONDS:-60}
+      DATABASE_PATH: /data/sales.sqlite3
+    ports:
+      - "127.0.0.1:8010:8000"
+    volumes:
+      - shopify_sales_data:/data
+
+volumes:
+  shopify_sales_data:

@@ -1,0 +1,131 @@
+import asyncio
+import contextlib
+import secrets
+from collections import OrderedDict
+from contextlib import asynccontextmanager
+from pathlib import Path
+from time import monotonic
+
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.security import HTTPBasic, HTTPBasicCredentials
+from pydantic import BaseModel, Field
+
+from .config import Settings
+from .shopify import Shopify, ShopifyError
+from .store import Store
+from .sync import Sync
+
+STATIC = Path(__file__).parent / "static"
+
+
+class Product(BaseModel):
+    id: str = Field(pattern=r"^gid://shopify/Product/\d+$", max_length=100)
+    title: str = Field(min_length=1, max_length=500)
+
+
+class ProductSelection(BaseModel):
+    products: list[Product] = Field(max_length=100)
+
+
+def create_app(settings=None, shopify=None, poll=True):
+    settings = settings or Settings.from_env()
+    store = Store(settings.db_path)
+    shopify = shopify or Shopify(settings)
+    sync = Sync(settings, store, shopify)
+    failures = OrderedDict()
+
+    @asynccontextmanager
+    async def lifespan(app):
+        task = asyncio.create_task(sync.run()) if poll else None
+        try:
+            yield
+        finally:
+            if task:
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
+            await shopify.close()
+
+    app = FastAPI(title="Sales Pulse", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.store, app.state.sync = store, sync
+    basic = HTTPBasic(auto_error=False)
+
+    async def authenticate(request: Request, credentials: HTTPBasicCredentials | None = Depends(basic)):
+        address = request.client.host if request.client else "unknown"
+        now = monotonic()
+        count, until = failures.get(address, (0, 0))
+        if now >= until:
+            count = 0
+        if count >= 10:
+            raise HTTPException(429, "Too many login attempts; try again in 5 minutes", headers={"Retry-After": "300"})
+        valid_user = secrets.compare_digest((credentials.username if credentials else "").encode(), settings.username.encode())
+        valid_pass = secrets.compare_digest((credentials.password if credentials else "").encode(), settings.password.encode())
+        if not (valid_user and valid_pass):
+            if credentials:
+                failures[address] = (count + 1, now + 300)
+                failures.move_to_end(address)
+                if len(failures) > 4096:
+                    failures.popitem(last=False)
+            raise HTTPException(401, "Authentication required", headers={"WWW-Authenticate": 'Basic realm="Sales Pulse", charset="UTF-8"'})
+        failures.pop(address, None)
+
+    @app.middleware("http")
+    async def security(request, call_next):
+        if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("X-Sales-Request") != "1":
+            return JSONResponse({"detail": "Missing request header"}, status_code=403)
+        response = await call_next(request)
+        response.headers.update({
+            "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff",
+            "Referrer-Policy": "no-referrer", "X-Frame-Options": "DENY",
+            "Content-Security-Policy": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        })
+        return response
+
+    @app.get("/healthz")
+    async def health():
+        return {"status": "ok"}
+
+    @app.get("/", dependencies=[Depends(authenticate)])
+    async def index():
+        return FileResponse(STATIC / "index.html")
+
+    @app.get("/assets/{name}", dependencies=[Depends(authenticate)])
+    async def asset(name: str):
+        if name not in ("app.js", "style.css", "chart.umd.js"):
+            raise HTTPException(404)
+        return FileResponse(STATIC / name)
+
+    @app.get("/api/status", dependencies=[Depends(authenticate)])
+    async def status():
+        return {"configured": settings.configured, "shop": settings.shop, "shop_name": store.get("shop_name"),
+                "timezone": settings.timezone, "shop_timezone": store.get("shop_timezone"),
+                "history_days": settings.history_days, "poll_seconds": settings.poll_seconds,
+                "syncing": sync.running, "imported_orders": store.get("sync_progress", 0),
+                "last_success": store.get("last_success"), "last_attempt": store.get("last_attempt"),
+                "last_error": store.get("last_error"), "products": store.products()}
+
+    @app.get("/api/dashboard", dependencies=[Depends(authenticate)])
+    async def dashboard(days: int = Query(7, ge=1, le=60)):
+        try:
+            return await asyncio.to_thread(store.dashboard, days, settings.timezone)
+        except ValueError:
+            raise HTTPException(409, "Shop currency changed; choose a shorter period")
+
+    @app.get("/api/products", dependencies=[Depends(authenticate)])
+    async def products(q: str = Query("", max_length=100), after: str | None = Query(None, max_length=1000)):
+        if not settings.configured:
+            raise HTTPException(409, "Shopify is not configured yet")
+        try:
+            return await shopify.catalog(q.strip(), after)
+        except ShopifyError as exc:
+            raise HTTPException(502, str(exc))
+
+    @app.put("/api/products", dependencies=[Depends(authenticate)])
+    async def select_products(selection: ProductSelection):
+        if len({p.id for p in selection.products}) != len(selection.products):
+            raise HTTPException(422, "Duplicate product IDs")
+        store.select_products([p.model_dump() for p in selection.products])
+        return {"products": store.products()}
+
+    return app
