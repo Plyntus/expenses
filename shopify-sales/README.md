@@ -4,7 +4,7 @@ Separate service in the expenses repository. It has its own image, password, dat
 
 Configured Coolify resource: `shopify-sales` (`bsx2yfwc7vai3076g1uixf1p`). External address: `https://flipper1.78.46.135.213.sslip.io`. This address resolves to the Hetzner server without buying a domain. HTTPS still depends on successful certificate issuance and renewal from the shared DNS service. Dashboard credentials are kept in Coolify runtime variables, not in this repository.
 
-One Python/FastAPI process polls Shopify GraphQL Admin API every 60 seconds, even with no browser open. SQLite persists order lines; the page reads the local data and refreshes every minute. Chart.js is bundled locally. No customer names, emails, addresses or payment details are requested or stored.
+One Python/FastAPI process polls Shopify GraphQL Admin API every 60 seconds, even with no browser open. SQLite persists only lines matching the four fixed SKUs; the page reads the local data and refreshes every minute. Chart.js is bundled locally. No customer names, emails, addresses or payment details are requested or stored.
 
 ## 1. Shopify connection
 
@@ -46,7 +46,16 @@ References: [Coolify Dockerfile build](https://coolify.io/docs/applications/buil
 
 ## 3. Open the dashboard
 
-Open the HTTPS URL. The browser asks for the dashboard login/password. Click **Выбрать товары**, search the Shopify catalog and save up to 100 products. All variants of a selected product are combined. The selection survives redeploys in SQLite.
+Open the HTTPS URL. The browser asks for the dashboard login/password. The dashboard is fixed to **Flipper One Pre-order** and these exact, case-sensitive SKU values:
+
+- `FLP-O-COUPON-349`
+- `FLP-O-COUPON-399`
+- `FLP-O-COUPON-449`
+- `FLP-O-COUPON-499`
+
+Each SKU has its own revenue, units, order count and daily chart series. No product selection is needed or exposed. All four SKUs remain visible even when one has no sales. Before the first successful import, amounts appear as dashes rather than misleading zeroes. Revenue comes from actual Shopify amounts, not the numeric suffix in the SKU.
+
+Shopify still returns complete order pages, which can include other products. The service discards non-matching line items before persistence and never stores order headers for orders with no matching SKU. Matching uses SKU, not a mutable product title. On startup, earlier caches are migrated: unrelated lines and empty order headers are removed, while tracked history and sync checkpoints are preserved. The previous product-selection table is retired.
 
 The first import may take several minutes. The page shows sync status, the last successful update and errors. Old data remains available during Shopify outages. No sample data is presented as live sales.
 
@@ -56,10 +65,10 @@ The first import may take several minutes. The page shows sync status, the last 
 - Units use Shopify `currentQuantity`. Revenue uses `priceAfterAllDiscountsBeforeTaxesSet.shopMoney`: current line total after discounts and product refunds, excluding tax and delivery. Monetary calculations use Python Decimal before serialization.
 - This is product revenue, not settlement/payout accounting. Refunds not allocated to a product line, chargebacks, shipping/tax refunds and payment fees are not included. Historical buckets change when the original order changes; refunds are attributed to the original order date.
 - Days use the order's `createdAt`, grouped in `DASHBOARD_TIMEZONE` (default Europe/Belgrade). The API also reports the shop timezone for comparison. Revenue is in shop currency. Mixed historical shop currencies produce an explicit error instead of a misleading total.
-- Orders are counted once in the overview even when they contain several selected products. Each product's own count includes orders containing that product.
+- Each SKU counts distinct orders containing that SKU. Several lines of the same SKU in one order count as one order. An order containing two tracked SKUs appears once in each SKU. The API retains a distinct overall order count, but the UI shows only the SKU breakdown.
 - Initial history is 30 days (`HISTORY_DAYS`, 1–60). After that, only new/updated orders are fetched using a persisted checkpoint, a fixed upper time bound and a five-minute overlap. Both orders and nested line items are paginated. The checkpoint advances only after a complete sync; retries are idempotent. Increasing HISTORY_DAYS triggers a new backfill.
 - Orders older than the configured history are pruned. Shopify's standard `read_orders` scope exposes the last 60 days; no `read_all_orders` access is required.
-- This service handles one store. It does not automatically reconcile hard-deleted orders. To reconcile them, stop the application, back up the database, clear the `orders` table and the `checkpoint` state key, then restart for a full import. Keep the saved product selection and credentials.
+- This service handles one store. It does not automatically reconcile hard-deleted orders. To reconcile them, stop the application, back up the database, clear the `orders` table and the `checkpoint` state key, then restart for a full import. Keep the same credentials and fixed SKU configuration.
 
 ## Local run / Docker Compose alternative
 
@@ -89,7 +98,7 @@ python -m unittest discover -s tests -v
 
 ## Operations
 
-- `/healthz` is public and only returns process health; it does not claim that Shopify is connected. The page, assets and all sales/configuration APIs require authentication. `/api/status` exposes last successful sync to authenticated clients.
+- `/healthz` is public and only returns process health; it does not claim that Shopify is connected. The page, assets and all sales/status APIs require authentication. The former product-catalog and selection endpoints are removed; the tracked SKUs cannot be expanded from the UI. `/api/status` exposes last successful sync to authenticated clients.
 - The service retries transient errors and rate limits with bounded backoff, automatically renews client-credentials tokens, serializes API requests and respects the GraphQL cost budget. No Shopify secrets are sent to the browser or written to logs.
 - Back up the `/data` volume using SQLite's online backup API or after stopping the application. Restore the database and keep the same environment variables to recover the dashboard.
 - Changing credentials, store or API version requires a redeploy. **Use a fresh volume if changing stores**, to avoid mixing different shops. Changing the dashboard password does not affect Shopify credentials.

@@ -4,7 +4,6 @@ import json
 import os
 import tempfile
 import unittest
-from dataclasses import replace
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
 
@@ -12,6 +11,7 @@ import httpx
 from fastapi.testclient import TestClient
 
 from app.config import Settings
+from app.config import TRACKED_SKUS
 from app.main import create_app
 from app.shopify import Shopify, ShopifyError
 from app.store import Store
@@ -22,8 +22,8 @@ P2 = "gid://shopify/Product/2"
 NOW = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
 
 
-def line(line_id="line-1", product=P1, amount="18.90", quantity=2):
-    return {"id": line_id, "product": {"id": product}, "title": "Flipper Zero", "sku": "FZ",
+def line(line_id="line-1", product=P1, amount="18.90", quantity=2, sku=TRACKED_SKUS[0]):
+    return {"id": line_id, "product": {"id": product}, "title": "Flipper One Pre-order", "sku": sku,
             "currentQuantity": quantity, "priceAfterAllDiscountsBeforeTaxesSet": {
                 "shopMoney": {"amount": amount, "currencyCode": "USD"}}}
 
@@ -38,7 +38,6 @@ class StoreTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.store = Store(self.tmp.name + "/sales.sqlite3")
-        self.store.select_products([{"id": P1, "title": "Flipper Zero"}, {"id": P2, "title": "Case"}])
 
     def tearDown(self):
         self.tmp.cleanup()
@@ -47,12 +46,17 @@ class StoreTests(unittest.TestCase):
         return self.store.dashboard(days, tz, NOW)
 
     def test_repeated_polls_do_not_double_count_and_orders_are_distinct(self):
-        item = order(lines=[line(), line("line-2", P2, "0.10", 1)])
+        item = order(lines=[line(), line("line-2", P1, "0.10", 1, sku=TRACKED_SKUS[1])])
         self.store.upsert_orders([item])
         self.store.upsert_orders([item])
         totals = self.dashboard()["totals"]
         self.assertEqual(totals, {"revenue": 19.0, "quantity": 3, "orders": 1})
         self.assertEqual(len(self.dashboard()["daily"]), 7)
+        skus = self.dashboard()["skus"]
+        self.assertEqual([s["sku"] for s in skus], list(TRACKED_SKUS))
+        self.assertEqual([s["revenue"] for s in skus], [18.9, 0.1, 0, 0])
+        self.assertEqual([s["orders"] for s in skus], [1, 1, 0, 0])
+        self.assertEqual(skus[0]["daily"][-1]["orders"], 1)
 
     def test_partial_then_full_refund_and_cancel_replace_original(self):
         self.store.upsert_orders([order()])
@@ -73,11 +77,59 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.dashboard(1)["totals"]["orders"], 1)
         self.assertEqual(self.dashboard(1, "UTC")["totals"]["orders"], 0)
 
-    def test_selection_changes_without_reimport_and_survives_restart(self):
+    def test_migration_removes_untracked_history_but_keeps_tracked_data_and_checkpoint(self):
         self.store.upsert_orders([order()])
-        self.store.select_products([{"id": P2, "title": "Case"}])
+        self.store.set("checkpoint", "2026-10-19T11:00:00+00:00")
+        with self.store.connect() as db:
+            db.execute("CREATE TABLE products (id TEXT PRIMARY KEY, title TEXT)")
+            db.execute("INSERT INTO products VALUES ('old-product', 'Untracked product')")
+            db.execute("INSERT INTO orders VALUES ('untracked-order','2026-10-19T10:00:00+00:00','2026-10-19T10:01:00+00:00',1)")
+            db.execute("INSERT INTO lines VALUES ('untracked-line','untracked-order','other','Other','OTHER-SKU',5,'5000','USD')")
+            db.execute("INSERT INTO lines VALUES ('mixed-line','order-1','other','Other','OTHER-SKU',5,'5000','USD')")
+        reopened = Store(self.store.path)
+        self.assertEqual(reopened.get("checkpoint"), "2026-10-19T11:00:00+00:00")
+        with reopened.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM lines").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM orders").fetchone()[0], 1)
+            self.assertIsNone(db.execute("SELECT name FROM sqlite_master WHERE name='products'").fetchone())
+        self.assertEqual(self.dashboard()["skus"][0]["revenue"], 18.9)
+
+    def test_exact_sku_filter_drops_other_lines_and_unrelated_orders(self):
+        self.store.upsert_orders([
+            order(lines=[line(), line("other", sku="FLP-O-COUPON-349-EXTRA", amount="9999")]),
+            order("unknown", lines=[line("unknown", sku=None)]),
+            order("different", lines=[line("different", sku="FZ")]),
+        ])
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM lines").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM orders").fetchone()[0], 1)
+        self.assertEqual(self.dashboard()["totals"]["revenue"], 18.9)
+
+    def test_order_edit_removes_previous_sku_and_untracked_orders(self):
+        self.store.upsert_orders([order()])
+        self.store.upsert_orders([order(lines=[line(sku=TRACKED_SKUS[3])])])
+        self.assertEqual([s["quantity"] for s in self.dashboard()["skus"]], [0, 0, 0, 2])
+        self.store.upsert_orders([order(lines=[line(sku="UNTRACKED")])])
         self.assertEqual(self.dashboard()["totals"]["quantity"], 0)
-        self.assertEqual(Store(self.store.path).products(), [{"id": P2, "title": "Case"}])
+        with self.store.connect() as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM orders").fetchone()[0], 0)
+
+    def test_all_four_variants_of_same_product_are_separate(self):
+        self.store.upsert_orders([order(lines=[line(str(i), P1, str((i + 1) * 10), i + 1, sku=sku)
+                                              for i, sku in enumerate(TRACKED_SKUS)])])
+        data = self.dashboard()
+        self.assertEqual([s["quantity"] for s in data["skus"]], [1, 2, 3, 4])
+        self.assertEqual([s["revenue"] for s in data["skus"]], [10, 20, 30, 40])
+        self.assertEqual([s["daily"][-1]["quantity"] for s in data["skus"]], [1, 2, 3, 4])
+        self.assertEqual(data["totals"]["orders"], 1)
+
+    def test_multiple_lines_of_one_sku_count_one_order(self):
+        self.store.upsert_orders([order(lines=[line("a"), line("b")])])
+        item = self.dashboard()["skus"][0]
+        self.assertEqual(item["quantity"], 4)
+        self.assertEqual(item["revenue"], 37.8)
+        self.assertEqual(item["orders"], 1)
+        self.assertEqual(item["daily"][-1]["orders"], 1)
 
     def test_invalid_page_rolls_back(self):
         self.store.upsert_orders([order()])
@@ -113,7 +165,7 @@ class ApiTests(unittest.TestCase):
 
     def test_health_only_is_public(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
-        for path in ("/", "/assets/app.js", "/api/status", "/api/dashboard", "/api/products"):
+        for path in ("/", "/assets/app.js", "/api/status", "/api/dashboard"):
             self.assertEqual(self.client.get(path).status_code, 401, path)
         self.assertEqual(self.client.get("/api/dashboard", auth=self.auth).status_code, 200)
 
@@ -125,14 +177,15 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(response.headers["cache-control"], "no-store")
         self.assertIn("frame-ancestors 'none'", response.headers["content-security-policy"])
 
-    def test_product_writes_require_csrf_header_and_validate_ids(self):
-        payload = {"products": [{"id": P1, "title": "Flipper Zero"}]}
-        self.assertEqual(self.client.put("/api/products", json=payload, auth=self.auth).status_code, 403)
-        result = self.client.put("/api/products", json=payload, auth=self.auth, headers={"X-Sales-Request": "1"})
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(self.client.get("/api/status", auth=self.auth).json()["products"], payload["products"])
-        payload["products"][0]["id"] = "../../etc/passwd"
-        self.assertEqual(self.client.put("/api/products", json=payload, auth=self.auth, headers={"X-Sales-Request": "1"}).status_code, 422)
+    def test_fixed_sku_api_does_not_allow_other_products(self):
+        status = self.client.get("/api/status", auth=self.auth).json()
+        self.assertEqual(status["tracked_skus"], list(TRACKED_SKUS))
+        data = self.client.get("/api/dashboard", auth=self.auth).json()
+        self.assertEqual([s["sku"] for s in data["skus"]], list(TRACKED_SKUS))
+        self.assertTrue(all(s["quantity"] == 0 for s in data["skus"]))
+        self.assertEqual(self.client.get("/api/products", auth=self.auth).status_code, 404)
+        self.assertEqual(self.client.put("/api/products", json={"products": []}, auth=self.auth,
+                                         headers={"X-Sales-Request": "1"}).status_code, 404)
 
     def test_authentication_rate_limit(self):
         for _ in range(10):

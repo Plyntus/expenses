@@ -7,6 +7,7 @@ from decimal import Decimal
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+from .config import PRODUCT_TITLE, TRACKED_SKUS
 
 def utcnow():
     return datetime.now(timezone.utc)
@@ -24,7 +25,6 @@ class Store:
             db.executescript("""
                 PRAGMA journal_mode=WAL;
                 CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value TEXT NOT NULL);
-                CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY, title TEXT NOT NULL);
                 CREATE TABLE IF NOT EXISTS orders (
                     id TEXT PRIMARY KEY, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
                     eligible INTEGER NOT NULL
@@ -36,7 +36,13 @@ class Store:
                 );
                 CREATE INDEX IF NOT EXISTS lines_order ON lines(order_id);
                 CREATE INDEX IF NOT EXISTS orders_created ON orders(created_at);
+                CREATE INDEX IF NOT EXISTS lines_sku ON lines(sku);
             """)
+            # Migrate the earlier product-wide cache without losing tracked history.
+            placeholders = ",".join("?" for _ in TRACKED_SKUS)
+            db.execute(f"DELETE FROM lines WHERE sku NOT IN ({placeholders})", TRACKED_SKUS)
+            db.execute("DELETE FROM orders WHERE NOT EXISTS (SELECT 1 FROM lines WHERE order_id=orders.id)")
+            db.execute("DROP TABLE IF EXISTS products")
 
     @contextmanager
     def connect(self):
@@ -58,18 +64,14 @@ class Store:
         with self.connect() as db:
             db.execute("INSERT OR REPLACE INTO state VALUES (?, ?)", (key, json.dumps(value)))
 
-    def products(self):
-        with self.connect() as db:
-            return [dict(row) for row in db.execute("SELECT * FROM products ORDER BY title")]
-
-    def select_products(self, products):
-        with self.connect() as db:
-            db.execute("DELETE FROM products")
-            db.executemany("INSERT INTO products VALUES (?, ?)", [(p["id"], p["title"]) for p in products])
-
     def upsert_orders(self, orders):
         with self.connect() as db:
             for order in orders:
+                lines = [line for line in order["lineItems"]["nodes"] if line.get("sku") in TRACKED_SKUS]
+                if not lines:
+                    # An edited order can stop containing every tracked SKU.
+                    db.execute("DELETE FROM orders WHERE id=?", (order["id"],))
+                    continue
                 eligible = not order["test"] and not order["cancelledAt"] and order["displayFinancialStatus"] in (
                     "PAID", "PARTIALLY_REFUNDED", "REFUNDED"
                 )
@@ -79,7 +81,7 @@ class Store:
                     (order["id"], parse_date(order["createdAt"]).isoformat(),
                      parse_date(order["updatedAt"]).isoformat(), int(bool(eligible))))
                 db.execute("DELETE FROM lines WHERE order_id=?", (order["id"],))
-                for line in order["lineItems"]["nodes"]:
+                for line in lines:
                     money = line["priceAfterAllDiscountsBeforeTaxesSet"]["shopMoney"]
                     # Parse here so malformed upstream data rolls back this entire page.
                     amount = str(Decimal(money["amount"]))
@@ -99,11 +101,9 @@ class Store:
         first = today - timedelta(days=days - 1)
         labels = [(first + timedelta(days=i)).isoformat() for i in range(days)]
         start = datetime.combine(first, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc)
-        products = self.products()
-        ids = {p["id"] for p in products}
-        buckets = {p["id"]: {"id": p["id"], "title": p["title"], "quantity": 0,
+        buckets = {sku: {"sku": sku, "title": PRODUCT_TITLE, "quantity": 0,
                    "revenue": Decimal(0), "orders": set(),
-                   "daily": {day: {"quantity": 0, "revenue": Decimal(0)} for day in labels}} for p in products}
+                   "daily": {day: {"quantity": 0, "revenue": Decimal(0), "orders": set()} for day in labels}} for sku in TRACKED_SKUS}
         currencies = set()
         with self.connect() as db:
             rows = db.execute("""SELECT l.*, o.created_at FROM lines l JOIN orders o ON o.id=l.order_id
@@ -111,19 +111,20 @@ class Store:
         all_orders = set()
         daily_orders = defaultdict(set)
         for row in rows:
-            if row["product_id"] not in ids:
+            if row["sku"] not in buckets:
                 continue
             day = parse_date(row["created_at"]).astimezone(tz).date().isoformat()
             if day not in labels or parse_date(row["created_at"]) > now:
                 continue
             currencies.add(row["currency"])
-            item = buckets[row["product_id"]]
+            item = buckets[row["sku"]]
             amount = Decimal(row["amount"])
             item["quantity"] += row["quantity"]
             item["revenue"] += amount
             item["orders"].add(row["order_id"])
             item["daily"][day]["quantity"] += row["quantity"]
             item["daily"][day]["revenue"] += amount
+            item["daily"][day]["orders"].add(row["order_id"])
             all_orders.add(row["order_id"])
             daily_orders[day].add(row["order_id"])
         if len(currencies) > 1:
@@ -134,8 +135,9 @@ class Store:
         serialized = []
         for item in buckets.values():
             serialized.append({**item, "revenue": float(item["revenue"]), "orders": len(item["orders"]),
-                               "daily": [{"date": day, "quantity": value["quantity"], "revenue": float(value["revenue"])} for day, value in item["daily"].items()]})
+                               "daily": [{"date": day, "quantity": value["quantity"], "revenue": float(value["revenue"]),
+                                          "orders": len(value["orders"])} for day, value in item["daily"].items()]})
         return {"currency": currency, "timezone": tz_name, "days": days,
                 "totals": {"revenue": float(sum((p["revenue"] for p in buckets.values()), Decimal(0))),
                            "quantity": sum(p["quantity"] for p in buckets.values()), "orders": len(all_orders)},
-                "daily": daily, "products": sorted(serialized, key=lambda p: p["revenue"], reverse=True)}
+                "daily": daily, "skus": serialized}

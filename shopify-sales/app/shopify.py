@@ -1,5 +1,4 @@
 import asyncio
-import re
 import time
 
 import httpx
@@ -113,13 +112,3 @@ class Shopify:
             if not connection["pageInfo"]["hasNextPage"]:
                 break
             after = connection["pageInfo"]["endCursor"]
-
-    async def catalog(self, search="", after=None):
-        query = """query Products($query: String!, $after: String) {
-            products(first: 50, query: $query, after: $after, sortKey: TITLE) {
-                nodes { id title status } pageInfo { hasNextPage endCursor }
-            }
-        }"""
-        tokens = [re.sub(r'''([\\():"'*])''', r'\\\1', token) for token in search.split()]
-        search_query = " AND ".join(f"title:{token}*" for token in tokens)
-        return (await self.graphql(query, {"query": search_query, "after": after}))["products"]

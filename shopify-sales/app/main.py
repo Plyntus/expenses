@@ -9,23 +9,12 @@ from time import monotonic
 from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
-from pydantic import BaseModel, Field
-
-from .config import Settings
-from .shopify import Shopify, ShopifyError
+from .config import PRODUCT_TITLE, TRACKED_SKUS, Settings
+from .shopify import Shopify
 from .store import Store
 from .sync import Sync
 
 STATIC = Path(__file__).parent / "static"
-
-
-class Product(BaseModel):
-    id: str = Field(pattern=r"^gid://shopify/Product/\d+$", max_length=100)
-    title: str = Field(min_length=1, max_length=500)
-
-
-class ProductSelection(BaseModel):
-    products: list[Product] = Field(max_length=100)
 
 
 def create_app(settings=None, shopify=None, poll=True):
@@ -103,7 +92,8 @@ def create_app(settings=None, shopify=None, poll=True):
                 "history_days": settings.history_days, "poll_seconds": settings.poll_seconds,
                 "syncing": sync.running, "imported_orders": store.get("sync_progress", 0),
                 "last_success": store.get("last_success"), "last_attempt": store.get("last_attempt"),
-                "last_error": store.get("last_error"), "products": store.products()}
+                "last_error": store.get("last_error"), "product_title": PRODUCT_TITLE,
+                "tracked_skus": TRACKED_SKUS}
 
     @app.get("/api/dashboard", dependencies=[Depends(authenticate)])
     async def dashboard(days: int = Query(7, ge=1, le=60)):
@@ -111,21 +101,5 @@ def create_app(settings=None, shopify=None, poll=True):
             return await asyncio.to_thread(store.dashboard, days, settings.timezone)
         except ValueError:
             raise HTTPException(409, "Shop currency changed; choose a shorter period")
-
-    @app.get("/api/products", dependencies=[Depends(authenticate)])
-    async def products(q: str = Query("", max_length=100), after: str | None = Query(None, max_length=1000)):
-        if not settings.configured:
-            raise HTTPException(409, "Shopify is not configured yet")
-        try:
-            return await shopify.catalog(q.strip(), after)
-        except ShopifyError as exc:
-            raise HTTPException(502, str(exc))
-
-    @app.put("/api/products", dependencies=[Depends(authenticate)])
-    async def select_products(selection: ProductSelection):
-        if len({p.id for p in selection.products}) != len(selection.products):
-            raise HTTPException(422, "Duplicate product IDs")
-        store.select_products([p.model_dump() for p in selection.products])
-        return {"products": store.products()}
 
     return app
