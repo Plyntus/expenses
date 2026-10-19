@@ -97,6 +97,7 @@ def create_app(settings=None, shopify=None, poll=True):
                 "syncing": sync.running, "imported_orders": store.get("sync_progress", 0),
                 "last_success": store.get("last_success"), "last_attempt": store.get("last_attempt"),
                 "last_error": store.get("last_error"), "product_title": PRODUCT_TITLE,
+                "refunds_ready": store.refunds_ready(),
                 "tracked_skus": TRACKED_SKUS}
 
     @app.get("/api/dashboard", dependencies=[Depends(authenticate)])

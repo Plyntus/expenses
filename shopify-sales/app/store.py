@@ -44,6 +44,11 @@ class Store:
             columns = {row[1] for row in db.execute("PRAGMA table_info(orders)")}
             if "financial_status" not in columns:
                 db.execute("ALTER TABLE orders ADD COLUMN financial_status TEXT NOT NULL DEFAULT 'UNKNOWN'")
+            line_columns = {row[1] for row in db.execute("PRAGMA table_info(lines)")}
+            for column in ("original_quantity", "refunded_quantity"):
+                if column not in line_columns:
+                    # NULL means not imported yet; never present it as zero refunds.
+                    db.execute(f"ALTER TABLE lines ADD COLUMN {column} INTEGER")
             # Migrate the earlier product-wide cache without losing tracked history.
             placeholders = ",".join("?" for _ in TRACKED_SKUS)
             db.execute(f"DELETE FROM lines WHERE sku NOT IN ({placeholders})", TRACKED_SKUS)
@@ -79,7 +84,13 @@ class Store:
                     db.execute("DELETE FROM orders WHERE id=?", (order["id"],))
                     continue
                 status = order["displayFinancialStatus"]
-                eligible = not order["test"] and not order["cancelledAt"] and status in COUNTED_STATUSES
+                refunds = defaultdict(int)
+                for refund in order["refunds"]:
+                    for item in refund["refundLineItems"]["nodes"]:
+                        refunds[item["lineItem"]["id"]] += item["quantity"]
+                # A cancelled, refunded sale stays in order/refund history.
+                has_product_refund = any(refunds[line["id"]] > 0 for line in lines)
+                eligible = not order["test"] and status in COUNTED_STATUSES and (not order["cancelledAt"] or has_product_refund)
                 db.execute("""INSERT INTO orders (id, created_at, updated_at, eligible, financial_status) VALUES (?, ?, ?, ?, ?)
                     ON CONFLICT(id) DO UPDATE SET created_at=excluded.created_at,
                     updated_at=excluded.updated_at, eligible=excluded.eligible, financial_status=excluded.financial_status""",
@@ -90,14 +101,22 @@ class Store:
                     money = line["priceAfterAllDiscountsBeforeTaxesSet"]["shopMoney"]
                     # Parse here so malformed upstream data rolls back this entire page.
                     amount = str(Decimal(money["amount"]))
-                    db.execute("INSERT INTO lines VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (
+                    db.execute("""INSERT INTO lines
+                        (id, order_id, product_id, title, sku, quantity, amount, currency, original_quantity, refunded_quantity)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (
                         line["id"], order["id"], (line.get("product") or {}).get("id"),
                         line["title"], line.get("sku") or "", line["currentQuantity"], amount, money["currencyCode"],
+                        line["quantity"], refunds[line["id"]],
                     ))
 
-    def orders_needing_status(self, limit=20):
+    def orders_needing_refresh(self, limit=20):
         with self.connect() as db:
-            return [row[0] for row in db.execute("SELECT id FROM orders WHERE financial_status='UNKNOWN' LIMIT ?", (limit,))]
+            return [row[0] for row in db.execute("""SELECT id FROM orders WHERE financial_status='UNKNOWN'
+                OR EXISTS (SELECT 1 FROM lines WHERE order_id=orders.id
+                           AND (original_quantity IS NULL OR refunded_quantity IS NULL)) LIMIT ?""", (limit,))]
+
+    def refunds_ready(self):
+        return not self.orders_needing_refresh(limit=1)
 
     def remove_unavailable_orders(self, ids):
         with self.connect() as db:
@@ -112,12 +131,12 @@ class Store:
         start = now - timedelta(hours=24)
         intervals = [{"start_at": (start + timedelta(hours=i)).isoformat(),
                       "end_at": (start + timedelta(hours=i + 1)).isoformat()} for i in range(24)]
-        buckets = {sku: [{"quantity": 0, "orders": set()} for _ in intervals] for sku in TRACKED_SKUS}
+        buckets = {sku: [{"quantity": 0, "refunded_quantity": 0, "orders": set()} for _ in intervals] for sku in TRACKED_SKUS}
         overall = [set() for _ in intervals]
         with self.connect() as db:
-            rows = db.execute("""SELECT l.sku, l.quantity, l.order_id, o.created_at
+            rows = db.execute("""SELECT l.sku, l.quantity, l.refunded_quantity, l.order_id, o.created_at
                 FROM lines l JOIN orders o ON o.id=l.order_id
-                WHERE o.eligible=1 AND o.created_at >= ? AND o.created_at < ? AND l.quantity > 0""",
+                WHERE o.eligible=1 AND o.created_at >= ? AND o.created_at < ? AND COALESCE(l.original_quantity,l.quantity) > 0""",
                 (start.isoformat(), now.isoformat())).fetchall()
         for row in rows:
             if row["sku"] not in buckets:
@@ -127,13 +146,15 @@ class Store:
                 continue
             bucket = buckets[row["sku"]][index]
             bucket["quantity"] += row["quantity"]
+            bucket["refunded_quantity"] += row["refunded_quantity"] or 0
             bucket["orders"].add(row["order_id"])
             overall[index].add(row["order_id"])
         series = [{"sku": sku,
-                   "hourly": [{**intervals[i], "quantity": value["quantity"], "orders": len(value["orders"])}
+                   "hourly": [{**intervals[i], "quantity": value["quantity"], "refunded_quantity": value["refunded_quantity"], "orders": len(value["orders"])}
                               for i, value in enumerate(values)]} for sku, values in buckets.items()]
         return {"timezone": tz_name, "start_at": start.isoformat(), "end_at": now.isoformat(),
                 "hourly": [{**intervals[i], "quantity": sum(buckets[sku][i]["quantity"] for sku in TRACKED_SKUS),
+                            "refunded_quantity": sum(buckets[sku][i]["refunded_quantity"] for sku in TRACKED_SKUS),
                             "orders": len(overall[i])} for i in range(24)], "skus": series}
 
     def dashboard(self, days, tz_name, now=None):
@@ -143,13 +164,13 @@ class Store:
         first = today - timedelta(days=days - 1)
         labels = [(first + timedelta(days=i)).isoformat() for i in range(days)]
         start = datetime.combine(first, datetime.min.time(), tzinfo=tz).astimezone(timezone.utc)
-        buckets = {sku: {"sku": sku, "title": PRODUCT_TITLE, "quantity": 0,
+        buckets = {sku: {"sku": sku, "title": PRODUCT_TITLE, "quantity": 0, "refunded_quantity": 0,
                    "revenue": Decimal(0), "orders": set(), "authorized_orders": set(),
-                   "daily": {day: {"quantity": 0, "revenue": Decimal(0), "orders": set(), "authorized_orders": set()} for day in labels}} for sku in TRACKED_SKUS}
+                   "daily": {day: {"quantity": 0, "refunded_quantity": 0, "revenue": Decimal(0), "orders": set(), "authorized_orders": set()} for day in labels}} for sku in TRACKED_SKUS}
         currencies = set()
         with self.connect() as db:
             rows = db.execute("""SELECT l.*, o.created_at, o.financial_status FROM lines l JOIN orders o ON o.id=l.order_id
-                WHERE o.eligible=1 AND o.created_at >= ? AND l.quantity > 0""", (start.isoformat(),)).fetchall()
+                WHERE o.eligible=1 AND o.created_at >= ? AND COALESCE(l.original_quantity,l.quantity) > 0""", (start.isoformat(),)).fetchall()
         all_orders = set()
         all_authorized_orders = set()
         daily_orders = defaultdict(set)
@@ -163,9 +184,11 @@ class Store:
             item = buckets[row["sku"]]
             amount = Decimal(row["amount"])
             item["quantity"] += row["quantity"]
+            item["refunded_quantity"] += row["refunded_quantity"] or 0
             item["revenue"] += amount
             item["orders"].add(row["order_id"])
             item["daily"][day]["quantity"] += row["quantity"]
+            item["daily"][day]["refunded_quantity"] += row["refunded_quantity"] or 0
             item["daily"][day]["revenue"] += amount
             item["daily"][day]["orders"].add(row["order_id"])
             if row["financial_status"] == "AUTHORIZED":
@@ -178,15 +201,19 @@ class Store:
             raise ValueError("Multiple shop currencies in the selected period; totals cannot be combined")
         currency = next(iter(currencies), self.get("currency", "USD"))
         daily = [{"date": day, "revenue": float(sum((p["daily"][day]["revenue"] for p in buckets.values()), Decimal(0))),
-                  "quantity": sum(p["daily"][day]["quantity"] for p in buckets.values()), "orders": len(daily_orders[day])} for day in labels]
+                  "quantity": sum(p["daily"][day]["quantity"] for p in buckets.values()),
+                  "refunded_quantity": sum(p["daily"][day]["refunded_quantity"] for p in buckets.values()),
+                  "orders": len(daily_orders[day])} for day in labels]
         serialized = []
         for item in buckets.values():
             serialized.append({**item, "revenue": float(item["revenue"]), "orders": len(item["orders"]),
                                "authorized_orders": len(item["authorized_orders"]),
                                "daily": [{"date": day, "quantity": value["quantity"], "revenue": float(value["revenue"]),
+                                          "refunded_quantity": value["refunded_quantity"],
                                           "orders": len(value["orders"]), "authorized_orders": len(value["authorized_orders"])} for day, value in item["daily"].items()]})
-        return {"currency": currency, "timezone": tz_name, "days": days,
+        return {"currency": currency, "timezone": tz_name, "days": days, "refunds_ready": self.refunds_ready(),
                 "totals": {"revenue": float(sum((p["revenue"] for p in buckets.values()), Decimal(0))),
                            "quantity": sum(p["quantity"] for p in buckets.values()), "orders": len(all_orders),
+                           "refunded_quantity": sum(p["refunded_quantity"] for p in buckets.values()),
                            "authorized_orders": len(all_authorized_orders)},
                 "daily": daily, "skus": serialized, "last_24_hours": self.hourly(tz_name, now)}

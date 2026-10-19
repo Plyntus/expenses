@@ -8,9 +8,10 @@ class ShopifyError(Exception):
     pass
 
 
-LINE_FIELDS = """id title sku currentQuantity product { id }
+LINE_FIELDS = """id title sku quantity currentQuantity product { id }
     priceAfterAllDiscountsBeforeTaxesSet { shopMoney { amount currencyCode } }"""
 ORDER_FIELDS = """id createdAt updatedAt cancelledAt test displayFinancialStatus
+    refunds { id }
     lineItems(first: 20) { nodes { %s } pageInfo { hasNextPage endCursor } }""" % LINE_FIELDS
 ORDERS_QUERY = """query Orders($query: String!, $after: String) {
     orders(first: 20, after: $after, query: $query, sortKey: UPDATED_AT) {
@@ -25,6 +26,11 @@ LINES_QUERY = """query Lines($id: ID!, $after: String!) {
 ORDERS_BY_ID_QUERY = """query CachedOrders($ids: [ID!]!) {
     nodes(ids: $ids) { ... on Order { %s } }
 }""" % ORDER_FIELDS
+REFUND_LINES_QUERY = """query RefundLines($id: ID!, $after: String) {
+    refund(id: $id) { refundLineItems(first: 100, after: $after) {
+        nodes { quantity lineItem { id } } pageInfo { hasNextPage endCursor }
+    } }
+}"""
 
 
 class Shopify:
@@ -113,7 +119,25 @@ class Shopify:
         orders = [node for node in data["nodes"] if node is not None]
         for order in orders:
             await self.complete_lines(order)
+            await self.complete_refunds(order)
         return orders
+
+    async def complete_refunds(self, order):
+        # Fetch exact product allocations: order edits and shipping-only refunds
+        # must never be inferred as refunded units from currentQuantity alone.
+        for refund in order["refunds"]:
+            after = None
+            nodes = []
+            while True:
+                data = await self.graphql(REFUND_LINES_QUERY, {"id": refund["id"], "after": after})
+                if data.get("refund") is None:
+                    raise ShopifyError("A refund became unavailable during sync; retrying next poll")
+                connection = data["refund"]["refundLineItems"]
+                nodes.extend(connection["nodes"])
+                if not connection["pageInfo"]["hasNextPage"]:
+                    break
+                after = connection["pageInfo"]["endCursor"]
+            refund["refundLineItems"] = {"nodes": nodes}
 
     async def orders(self, search):
         after = None
@@ -121,6 +145,7 @@ class Shopify:
             connection = (await self.graphql(ORDERS_QUERY, {"query": search, "after": after}))["orders"]
             for order in connection["nodes"]:
                 await self.complete_lines(order)
+                await self.complete_refunds(order)
             yield connection["nodes"]
             if not connection["pageInfo"]["hasNextPage"]:
                 break

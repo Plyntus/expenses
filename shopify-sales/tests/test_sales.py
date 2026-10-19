@@ -22,16 +22,21 @@ P2 = "gid://shopify/Product/2"
 NOW = datetime(2026, 10, 19, 12, tzinfo=timezone.utc)
 
 
-def line(line_id="line-1", product=P1, amount="18.90", quantity=2, sku=TRACKED_SKUS[0]):
+def line(line_id="line-1", product=P1, amount="18.90", quantity=2, sku=TRACKED_SKUS[0], original=None):
     return {"id": line_id, "product": {"id": product}, "title": "Flipper One Pre-order", "sku": sku,
-            "currentQuantity": quantity, "priceAfterAllDiscountsBeforeTaxesSet": {
+            "quantity": quantity if original is None else original, "currentQuantity": quantity, "priceAfterAllDiscountsBeforeTaxesSet": {
                 "shopMoney": {"amount": amount, "currencyCode": "USD"}}}
 
 
 def order(order_id="order-1", lines=None, **kwargs):
     return {"id": order_id, "createdAt": "2026-10-19T10:00:00Z", "updatedAt": "2026-10-19T10:01:00Z",
-            "cancelledAt": None, "test": False, "displayFinancialStatus": "PAID",
+            "cancelledAt": None, "test": False, "displayFinancialStatus": "PAID", "refunds": [],
             "lineItems": {"nodes": lines or [line("line-" + order_id)], "pageInfo": {"hasNextPage": False, "endCursor": None}}, **kwargs}
+
+
+def refund(*allocations, refund_id="refund-1"):
+    return {"id": refund_id, "refundLineItems": {"nodes": [
+        {"quantity": quantity, "lineItem": {"id": line_id}} for line_id, quantity in allocations]}}
 
 
 class StoreTests(unittest.TestCase):
@@ -50,7 +55,7 @@ class StoreTests(unittest.TestCase):
         self.store.upsert_orders([item])
         self.store.upsert_orders([item])
         totals = self.dashboard()["totals"]
-        self.assertEqual(totals, {"revenue": 19.0, "quantity": 3, "orders": 1, "authorized_orders": 0})
+        self.assertEqual(totals, {"revenue": 19.0, "quantity": 3, "orders": 1, "authorized_orders": 0, "refunded_quantity": 0})
         self.assertEqual(len(self.dashboard()["daily"]), 7)
         skus = self.dashboard()["skus"]
         self.assertEqual([s["sku"] for s in skus], list(TRACKED_SKUS))
@@ -61,11 +66,56 @@ class StoreTests(unittest.TestCase):
     def test_partial_then_full_refund_and_cancel_replace_original(self):
         self.store.upsert_orders([order()])
         self.store.upsert_orders([order(lines=[line(amount="9.45", quantity=1)], displayFinancialStatus="PARTIALLY_REFUNDED")])
-        self.assertEqual(self.dashboard()["totals"], {"revenue": 9.45, "quantity": 1, "orders": 1, "authorized_orders": 0})
+        self.assertEqual(self.dashboard()["totals"], {"revenue": 9.45, "quantity": 1, "orders": 1, "authorized_orders": 0, "refunded_quantity": 0})
         self.store.upsert_orders([order(lines=[line(amount="0", quantity=0)], displayFinancialStatus="REFUNDED")])
         self.assertEqual(self.dashboard()["totals"]["quantity"], 0)
         self.store.upsert_orders([order(cancelledAt="2026-10-19T11:00:00Z")])
         self.assertEqual(self.dashboard()["totals"]["revenue"], 0)
+
+    def test_100_orders_10_refunds_leave_90_units_and_100_orders(self):
+        orders = []
+        for i in range(100):
+            returned = i < 10
+            orders.append(order(str(i), lines=[line(str(i), quantity=0 if returned else 1, original=1)],
+                displayFinancialStatus="REFUNDED" if returned else "AUTHORIZED",
+                cancelledAt="2026-10-19T11:00:00Z" if i < 5 else None,
+                refunds=[refund((str(i), 1))] if returned else []))
+        self.store.upsert_orders(orders)
+        self.store.upsert_orders(orders)
+        data = self.dashboard()
+        for result in (data['totals'], data['skus'][0], data['daily'][-1], data['skus'][0]['daily'][-1]):
+            self.assertEqual(result['quantity'], 90)
+            self.assertEqual(result['orders'], 100)
+            self.assertEqual(result['refunded_quantity'], 10)
+        self.assertTrue(data['refunds_ready'])
+        hours = data['last_24_hours']['hourly']
+        self.assertEqual(sum(h['orders'] for h in hours), 100)
+        self.assertEqual(sum(h['refunded_quantity'] for h in hours), 10)
+        self.assertEqual(sum(h['quantity'] for h in hours), 90)
+
+    def test_refunds_sum_exact_allocations_per_sku_and_do_not_infer_edits(self):
+        self.store.upsert_orders([order(lines=[
+            line('a', quantity=1, original=4), line('b', quantity=2, original=3),
+            line('c', quantity=3, original=5, sku=TRACKED_SKUS[1])],
+            displayFinancialStatus='PARTIALLY_REFUNDED', refunds=[
+                refund(('a', 1), ('b', 1)), refund(('a', 2), ('untracked', 99), refund_id='refund-2'),
+                refund(refund_id='shipping-only')])])
+        data = self.dashboard()
+        self.assertEqual(data['totals']['quantity'], 6)
+        self.assertEqual(data['totals']['orders'], 1)
+        self.assertEqual([s['refunded_quantity'] for s in data['skus']], [4, 0, 0, 0])
+        self.assertEqual([s['orders'] for s in data['skus']], [1, 1, 0, 0])
+        # Editing down to zero keeps the original order but does not invent a refund.
+        self.store.upsert_orders([order(lines=[line('a', quantity=0, original=4)])])
+        self.assertEqual(self.dashboard()['totals']['orders'], 1)
+        self.assertEqual(self.dashboard()['totals']['refunded_quantity'], 0)
+
+    def test_refunded_test_and_pending_orders_do_not_enter_metrics(self):
+        self.store.upsert_orders([order('test', test=True, lines=[line('a', quantity=0, original=1)],
+            displayFinancialStatus='REFUNDED', refunds=[refund(('a', 1))]),
+            order('pending', displayFinancialStatus='PENDING', lines=[line('b', quantity=0, original=1)], refunds=[refund(('b', 1))])])
+        self.assertEqual(self.dashboard()['totals']['orders'], 0)
+        self.assertEqual(self.dashboard()['totals']['refunded_quantity'], 0)
 
     def test_unpaid_cancelled_test_orders_are_excluded(self):
         self.store.upsert_orders([order("test", test=True), order("pending", displayFinancialStatus="PENDING"),
@@ -147,8 +197,8 @@ class StoreTests(unittest.TestCase):
             db.execute("CREATE TABLE products (id TEXT PRIMARY KEY, title TEXT)")
             db.execute("INSERT INTO products VALUES ('old-product', 'Untracked product')")
             db.execute("INSERT INTO orders (id,created_at,updated_at,eligible) VALUES ('untracked-order','2026-10-19T10:00:00+00:00','2026-10-19T10:01:00+00:00',1)")
-            db.execute("INSERT INTO lines VALUES ('untracked-line','untracked-order','other','Other','OTHER-SKU',5,'5000','USD')")
-            db.execute("INSERT INTO lines VALUES ('mixed-line','order-1','other','Other','OTHER-SKU',5,'5000','USD')")
+            db.execute("INSERT INTO lines (id,order_id,product_id,title,sku,quantity,amount,currency) VALUES ('untracked-line','untracked-order','other','Other','OTHER-SKU',5,'5000','USD')")
+            db.execute("INSERT INTO lines (id,order_id,product_id,title,sku,quantity,amount,currency) VALUES ('mixed-line','order-1','other','Other','OTHER-SKU',5,'5000','USD')")
         reopened = Store(self.store.path)
         self.assertEqual(reopened.get("checkpoint"), "2026-10-19T11:00:00+00:00")
         with reopened.connect() as db:
@@ -298,6 +348,67 @@ class ApiTests(unittest.TestCase):
 
 
 class ShopifyTests(unittest.IsolatedAsyncioTestCase):
+    async def test_refund_migration_repairs_unchanged_cached_orders_before_checkpoint(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            store = Store(tmp + '/db.sqlite3')
+            store.upsert_orders([order()])
+            with store.connect() as db:
+                db.execute('UPDATE lines SET original_quantity=NULL, refunded_quantity=NULL')
+            self.assertFalse(store.refunds_ready())
+            self.assertFalse(store.dashboard(7, 'UTC', NOW)['refunds_ready'])
+            store.set('checkpoint', '2026-10-19T11:00:00+00:00')
+            store.set('import_history_days', 30)
+            updated = order(lines=[line('line-order-1', quantity=0, original=2)],
+                displayFinancialStatus='REFUNDED', refunds=[refund(('line-order-1', 2))])
+
+            class FakeShopify:
+                async def orders_by_ids(self, ids):
+                    self.ids = ids
+                    return [updated]
+
+                async def orders(self, search):
+                    yield []
+
+            fake = FakeShopify()
+            sync = Sync(Settings('test', 'password', shop='test.myshopify.com', access_token='test'), store, fake)
+            await sync.once()
+            self.assertEqual(fake.ids, ['order-1'])
+            self.assertTrue(store.refunds_ready())
+            item = store.dashboard(7, 'UTC', NOW)['skus'][0]
+            self.assertEqual((item['quantity'], item['orders'], item['refunded_quantity']), (0, 1, 2))
+            self.assertIsNone(store.get('last_error'))
+
+    async def test_refund_line_pagination_and_multiple_refunds(self):
+        calls = []
+        first = order(refunds=[{'id':'refund-a'}, {'id':'refund-b'}])
+
+        def handler(request):
+            body = json.loads(request.content)
+            calls.append(body)
+            if 'CachedOrders' in body['query']:
+                return httpx.Response(200, json={'data':{'nodes':[copy.deepcopy(first)]}})
+            self.assertIn('query RefundLines', body['query'])
+            more = body['variables']['id'] == 'refund-a' and body['variables']['after'] is None
+            return httpx.Response(200, json={'data':{'refund':{'refundLineItems':{
+                'nodes':[{'quantity':1, 'lineItem':{'id':'line-order-1'}}],
+                'pageInfo':{'hasNextPage':more, 'endCursor':'next-refund-line'}}}}})
+
+        api = Shopify(Settings('test', 'password', shop='test.myshopify.com', access_token='test'),
+                      httpx.AsyncClient(transport=httpx.MockTransport(handler)))
+        rows = await api.orders_by_ids(['order-1'])
+        self.assertEqual([len(r['refundLineItems']['nodes']) for r in rows[0]['refunds']], [2,1])
+        self.assertEqual(calls[2]['variables']['after'], 'next-refund-line')
+        self.assertEqual(calls[3]['variables']['id'], 'refund-b')
+        await api.close()
+
+    async def test_missing_refund_fails_sync_instead_of_silently_reporting_zero(self):
+        api = Shopify(Settings('test', 'password', shop='test.myshopify.com', access_token='test'),
+                      httpx.AsyncClient(transport=httpx.MockTransport(lambda request:
+                          httpx.Response(200, json={'data':{'refund':None}}))))
+        with self.assertRaises(ShopifyError):
+            await api.complete_refunds(order(refunds=[{'id':'gone'}]))
+        await api.close()
+
     async def test_status_repair_refreshes_unchanged_cached_orders_and_retries_safely(self):
         with tempfile.TemporaryDirectory() as tmp:
             store = Store(tmp + "/db.sqlite3")
@@ -326,11 +437,11 @@ class ShopifyTests(unittest.IsolatedAsyncioTestCase):
             with patch("app.sync.utcnow", return_value=NOW):
                 await sync.once()
                 self.assertEqual(store.get("checkpoint"), checkpoint)
-                self.assertEqual(store.orders_needing_status(), ["order-1"])
+                self.assertEqual(store.orders_needing_refresh(), ["order-1"])
                 fake.fail = False
                 await sync.once()
             self.assertEqual(fake.requested_ids, [["order-1"], ["order-1"]])
-            self.assertEqual(store.orders_needing_status(), [])
+            self.assertEqual(store.orders_needing_refresh(), [])
             self.assertEqual(store.get("checkpoint"), NOW.isoformat())
             item = store.dashboard(7, "UTC", NOW)["skus"][0]
             self.assertEqual(item["orders"], 1)

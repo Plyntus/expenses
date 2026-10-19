@@ -20,9 +20,9 @@ class Sync:
         started = utcnow()
         self.store.set("last_attempt", started.isoformat())
         try:
-            # Repair existing cache rows after adding payment-status tracking, even if
+            # Repair existing cache rows after adding payment/refund tracking, even if
             # Shopify hasn't changed those orders since the persisted checkpoint.
-            while ids := self.store.orders_needing_status():
+            while ids := self.store.orders_needing_refresh():
                 orders = await self.shopify.orders_by_ids(ids)
                 self.store.upsert_orders(orders)
                 returned = {order["id"] for order in orders}

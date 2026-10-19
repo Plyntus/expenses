@@ -30,6 +30,7 @@ function statusView(s) {
   if (s.last_error) notice((last ? 'Your last successful data is preserved. ' : 'Data has not loaded yet. ') + s.last_error);
   else if (s.configured && !last) notice(s.syncing ? 'Loading history for your four SKUs. The first sync may take a few minutes.' : 'Waiting for the first Shopify import.');
   else if (s.configured && stale) notice('Data has not updated recently. Check the Shopify connection and application logs in Coolify.');
+  else if (s.configured && !s.refunds_ready) notice('Importing refund history. Refunded counts will appear when the import is complete.');
   else notice('');
   for (const option of $('period').options) option.disabled = Number(option.value) > s.history_days;
   if (Number($('period').value) > s.history_days) $('period').value = '1';
@@ -68,27 +69,30 @@ function drawChart(data) {
     datasets: datasets(hourly.skus, 'hourly')}, options});
 }
 function element(tag, className, text) { const node = document.createElement(tag); if (className) node.className = className; if (text !== undefined) node.textContent = text; return node; }
-function skuCard(item, hasData, index) {
+function skuCard(item, hasData, refundsReady, index) {
   const card = element('article', `sku-card sku-color-${index}`);
   card.dataset.sku = item.sku;
   const heading = element('h2', 'sku-name', item.sku);
   const label = element('p', 'muted', 'Units');
   const quantity = element('strong', 'sku-quantity', hasData ? fmt.format(item.quantity) : '—');
   const metrics = element('dl', 'sku-metrics');
-  for (const [name, value] of [['Orders', item.orders], ['Authorized', item.authorized_orders]]) {
-    const group = element('div'); group.append(element('dt', '', name), element('dd', '', hasData ? fmt.format(value) : '—')); metrics.append(group);
+  for (const [name, value] of [['Orders', item.orders], ['Refunded', item.refunded_quantity], ['Authorized', item.authorized_orders]]) {
+    const group = element('div');
+    const label = element('dt', '', name);
+    if (name === 'Refunded') label.title = 'Refunded units allocated to this SKU in Shopify';
+    group.append(label, element('dd', '', hasData && (name !== 'Refunded' || refundsReady) ? fmt.format(value) : '—')); metrics.append(group);
   }
   card.append(heading, label, quantity, metrics);
   return card;
 }
 function dataView(data) {
   const hasData = Boolean(state.last_success);
-  $('sku-cards').replaceChildren(...data.skus.map((item, index) => skuCard(item, hasData, index)));
+  $('sku-cards').replaceChildren(...data.skus.map((item, index) => skuCard(item, hasData, data.refunds_ready, index)));
   $('charts-area').hidden = !hasData;
   $('daily-table').replaceChildren(...data.daily.map((day, index) => ({day, index})).reverse().flatMap(({day, index}) => data.skus.map(item => {
     const values = item.daily[index];
     const tr = element('tr');
-    [dayLabel(day.date), item.sku, fmt.format(values.quantity), fmt.format(values.orders), fmt.format(values.authorized_orders)]
+    [dayLabel(day.date), item.sku, fmt.format(values.quantity), fmt.format(values.orders), data.refunds_ready ? fmt.format(values.refunded_quantity) : '—', fmt.format(values.authorized_orders)]
       .forEach(v => tr.append(element('td', '', v)));
     return tr;
   })));
