@@ -129,22 +129,31 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.dashboard(1, "UTC")["totals"]["orders"], 0)
 
     def test_hourly_window_has_24_buckets_and_exact_time_boundaries(self):
-        start = NOW - timedelta(hours=24)
+        now = NOW + timedelta(minutes=37, seconds=42)
+        start = NOW - timedelta(hours=23)
         samples = [
             ("start", start, 2, TRACKED_SKUS[0]),
             ("next-hour", start + timedelta(hours=1), 3, TRACKED_SKUS[1]),
-            ("recent", NOW - timedelta(microseconds=1), 4, TRACKED_SKUS[0]),
+            ("recent", now - timedelta(microseconds=1), 4, TRACKED_SKUS[0]),
             ("too-old", start - timedelta(microseconds=1), 99, TRACKED_SKUS[0]),
-            ("end", NOW, 99, TRACKED_SKUS[0]),
-            ("future", NOW + timedelta(minutes=1), 99, TRACKED_SKUS[0]),
+            ("end", now, 99, TRACKED_SKUS[0]),
+            ("future", now + timedelta(minutes=1), 99, TRACKED_SKUS[0]),
         ]
         self.store.upsert_orders([order(name, createdAt=stamp.isoformat(),
             lines=[line(name, quantity=quantity, sku=sku)]) for name, stamp, quantity, sku in samples])
-        data = self.store.hourly("Europe/Belgrade", NOW)
+        data = self.store.hourly("Europe/Belgrade", now)
         self.assertEqual(len(data["hourly"]), 24)
         self.assertEqual([len(s["hourly"]) for s in data["skus"]], [24, 24, 24, 24])
         self.assertEqual(data["start_at"], start.isoformat())
-        self.assertEqual(data["end_at"], NOW.isoformat())
+        self.assertEqual(data["end_at"], (NOW + timedelta(hours=1)).isoformat())
+        self.assertEqual(data["observed_until"], now.isoformat())
+        self.assertTrue(data["hourly"][-1]["partial"])
+        self.assertTrue(all(not b["partial"] for b in data["hourly"][:-1]))
+        later = self.store.hourly("Europe/Belgrade", now + timedelta(minutes=5))
+        self.assertEqual([b["start_at"] for b in data["hourly"]], [b["start_at"] for b in later["hourly"]])
+        for bucket in data["hourly"]:
+            self.assertEqual(datetime.fromisoformat(bucket["start_at"]).minute, 0)
+            self.assertEqual(datetime.fromisoformat(bucket["end_at"]).minute, 0)
         self.assertEqual(sum(b["quantity"] for b in data["hourly"]), 9)
         self.assertEqual(data["hourly"][0]["quantity"], 2)
         self.assertEqual(data["hourly"][1]["quantity"], 3)
@@ -152,6 +161,10 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(sum(b["quantity"] for b in data["skus"][0]["hourly"]), 6)
         self.assertEqual(sum(b["quantity"] for b in data["skus"][1]["hourly"]), 3)
         self.assertTrue(all(b["quantity"] == 0 for b in data["skus"][2]["hourly"]))
+        next_hour = self.store.hourly("Europe/Belgrade", NOW + timedelta(hours=1))
+        self.assertEqual(next_hour["start_at"], (start + timedelta(hours=1)).isoformat())
+        self.assertEqual(next_hour["hourly"][-1]["start_at"], (NOW + timedelta(hours=1)).isoformat())
+        self.assertEqual(next_hour["hourly"][-1]["quantity"], 0)
 
     def test_hourly_uses_existing_eligibility_and_distinct_order_rules(self):
         self.store.upsert_orders([
@@ -188,6 +201,7 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(data["hourly"]), 24)
         self.assertEqual(len(nonempty), 2)
         self.assertNotEqual(nonempty[0]["start_at"], nonempty[1]["start_at"])
+        self.assertEqual([b["start_at"] for b in nonempty], ["2026-10-25T00:00:00+00:00", "2026-10-25T01:00:00+00:00"])
         self.assertEqual(sum(b["quantity"] for b in nonempty), 4)
 
     def test_migration_removes_untracked_history_but_keeps_tracked_data_and_checkpoint(self):

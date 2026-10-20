@@ -128,9 +128,11 @@ class Store:
 
     def hourly(self, tz_name, now=None):
         now = (now or utcnow()).astimezone(timezone.utc)
-        start = now - timedelta(hours=24)
+        current_hour = now.astimezone(ZoneInfo(tz_name)).replace(minute=0, second=0, microsecond=0).astimezone(timezone.utc)
+        start = current_hour - timedelta(hours=23)
         intervals = [{"start_at": (start + timedelta(hours=i)).isoformat(),
-                      "end_at": (start + timedelta(hours=i + 1)).isoformat()} for i in range(24)]
+                      "end_at": (start + timedelta(hours=i + 1)).isoformat(),
+                      "partial": i == 23} for i in range(24)]
         buckets = {sku: [{"quantity": 0, "refunded_quantity": 0, "orders": set()} for _ in intervals] for sku in TRACKED_SKUS}
         overall = [set() for _ in intervals]
         with self.connect() as db:
@@ -152,7 +154,8 @@ class Store:
         series = [{"sku": sku,
                    "hourly": [{**intervals[i], "quantity": value["quantity"], "refunded_quantity": value["refunded_quantity"], "orders": len(value["orders"])}
                               for i, value in enumerate(values)]} for sku, values in buckets.items()]
-        return {"timezone": tz_name, "start_at": start.isoformat(), "end_at": now.isoformat(),
+        return {"timezone": tz_name, "start_at": start.isoformat(),
+                "end_at": intervals[-1]["end_at"], "observed_until": now.isoformat(),
                 "hourly": [{**intervals[i], "quantity": sum(buckets[sku][i]["quantity"] for sku in TRACKED_SKUS),
                             "refunded_quantity": sum(buckets[sku][i]["refunded_quantity"] for sku in TRACKED_SKUS),
                             "orders": len(overall[i])} for i in range(24)], "skus": series}

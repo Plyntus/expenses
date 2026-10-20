@@ -61,9 +61,9 @@ function drawChart(data) {
   options.scales.x.ticks.maxTicksLimit = 12;
   options.plugins.tooltip.callbacks.title = items => {
     const hour = hourly.hourly[items[0].dataIndex];
-    return `${fullTimeFormat.format(new Date(hour.start_at))} – ${fullTimeFormat.format(new Date(hour.end_at))}`;
+    return `${fullTimeFormat.format(new Date(hour.start_at))} – ${fullTimeFormat.format(new Date(hour.end_at))}${hour.partial ? ' · so far' : ''}`;
   };
-  $('hourly-window').textContent = `Rolling 60-minute buckets · ${hourly.timezone}`;
+  $('hourly-window').textContent = `Clock-hour buckets · current hour in progress · ${hourly.timezone}`;
   chartHourly = new Chart($('hourly-chart'), {type: 'line', data: {
     labels: hourly.hourly.map(hour => timeFormat.format(new Date(hour.start_at))),
     datasets: datasets(hourly.skus, 'hourly')}, options});
