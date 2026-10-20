@@ -88,7 +88,7 @@ class StoreTests(unittest.TestCase):
             self.assertEqual(result['orders'], 100)
             self.assertEqual(result['refunded_quantity'], 10)
         self.assertTrue(data['refunds_ready'])
-        hours = data['last_24_hours']['hourly']
+        hours = data['last_48_hours']['hourly']
         self.assertEqual(sum(h['orders'] for h in hours), 100)
         self.assertEqual(sum(h['refunded_quantity'] for h in hours), 10)
         self.assertEqual(sum(h['quantity'] for h in hours), 90)
@@ -128,9 +128,9 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(self.dashboard(1)["totals"]["orders"], 1)
         self.assertEqual(self.dashboard(1, "UTC")["totals"]["orders"], 0)
 
-    def test_hourly_window_has_24_buckets_and_exact_time_boundaries(self):
+    def test_hourly_window_has_48_buckets_and_exact_time_boundaries(self):
         now = NOW + timedelta(minutes=37, seconds=42)
-        start = NOW - timedelta(hours=23)
+        start = NOW - timedelta(hours=47)
         samples = [
             ("start", start, 2, TRACKED_SKUS[0]),
             ("next-hour", start + timedelta(hours=1), 3, TRACKED_SKUS[1]),
@@ -142,8 +142,8 @@ class StoreTests(unittest.TestCase):
         self.store.upsert_orders([order(name, createdAt=stamp.isoformat(),
             lines=[line(name, quantity=quantity, sku=sku)]) for name, stamp, quantity, sku in samples])
         data = self.store.hourly("Europe/Belgrade", now)
-        self.assertEqual(len(data["hourly"]), 24)
-        self.assertEqual([len(s["hourly"]) for s in data["skus"]], [24, 24, 24, 24])
+        self.assertEqual(len(data["hourly"]), 48)
+        self.assertEqual([len(s["hourly"]) for s in data["skus"]], [48, 48, 48, 48])
         self.assertEqual(data["start_at"], start.isoformat())
         self.assertEqual(data["end_at"], (NOW + timedelta(hours=1)).isoformat())
         self.assertEqual(data["observed_until"], now.isoformat())
@@ -181,14 +181,14 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(sum(b["orders"] for b in data["skus"][0]["hourly"]), 1)
         self.assertEqual(sum(b["quantity"] for b in data["skus"][0]["hourly"]), 5)
 
-    def test_last_24_hours_is_independent_of_daily_period(self):
-        self.store.upsert_orders([order(createdAt=(NOW - timedelta(hours=20)).isoformat())])
+    def test_last_48_hours_is_independent_of_daily_period(self):
+        self.store.upsert_orders([order(createdAt=(NOW - timedelta(hours=44)).isoformat())])
         today = self.store.dashboard(1, "UTC", NOW)
         week = self.store.dashboard(7, "UTC", NOW)
         self.assertEqual(today["totals"]["quantity"], 0)
         self.assertEqual(week["totals"]["quantity"], 2)
-        self.assertEqual(today["last_24_hours"], week["last_24_hours"])
-        self.assertEqual(sum(b["quantity"] for b in today["last_24_hours"]["hourly"]), 2)
+        self.assertEqual(today["last_48_hours"], week["last_48_hours"])
+        self.assertEqual(sum(b["quantity"] for b in today["last_48_hours"]["hourly"]), 2)
 
     def test_hourly_window_handles_daylight_saving_without_merging_hours(self):
         now = datetime(2026, 10, 25, 4, 30, tzinfo=timezone.utc)
@@ -198,7 +198,7 @@ class StoreTests(unittest.TestCase):
         ])
         data = self.store.hourly("Europe/Belgrade", now)
         nonempty = [b for b in data["hourly"] if b["quantity"]]
-        self.assertEqual(len(data["hourly"]), 24)
+        self.assertEqual(len(data["hourly"]), 48)
         self.assertEqual(len(nonempty), 2)
         self.assertNotEqual(nonempty[0]["start_at"], nonempty[1]["start_at"])
         self.assertEqual([b["start_at"] for b in nonempty], ["2026-10-25T00:00:00+00:00", "2026-10-25T01:00:00+00:00"])
@@ -348,8 +348,8 @@ class ApiTests(unittest.TestCase):
         data = self.client.get("/api/dashboard", auth=self.auth).json()
         self.assertEqual([s["sku"] for s in data["skus"]], list(TRACKED_SKUS))
         self.assertTrue(all(s["quantity"] == 0 for s in data["skus"]))
-        self.assertEqual(len(data["last_24_hours"]["hourly"]), 24)
-        self.assertEqual(len(data["last_24_hours"]["skus"]), 4)
+        self.assertEqual(len(data["last_48_hours"]["hourly"]), 48)
+        self.assertEqual(len(data["last_48_hours"]["skus"]), 4)
         self.assertEqual(self.client.get("/api/products", auth=self.auth).status_code, 404)
         self.assertEqual(self.client.put("/api/products", json={"products": []}, auth=self.auth,
                                          headers={"X-Sales-Request": "1"}).status_code, 404)

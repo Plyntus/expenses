@@ -54,7 +54,7 @@ function drawChart(data) {
       pointRadius: key === 'daily' && data.days === 1 ? 5 : 2, pointHoverRadius: 5}));
   }
   chartUnits = new Chart($('units-chart'), {type: 'line', data: {labels, datasets: datasets(data.skus, 'daily')}, options: chartOptions()});
-  const hourly = data.last_24_hours;
+  const hourly = data.last_48_hours;
   const timeFormat = new Intl.DateTimeFormat('en-US', {hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: hourly.timezone});
   const fullTimeFormat = new Intl.DateTimeFormat('en-US', {month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', hourCycle: 'h23', timeZone: hourly.timezone, timeZoneName: 'shortOffset'});
   const options = chartOptions();

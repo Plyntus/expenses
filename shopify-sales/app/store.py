@@ -129,10 +129,10 @@ class Store:
     def hourly(self, tz_name, now=None):
         now = (now or utcnow()).astimezone(timezone.utc)
         current_hour = now.astimezone(ZoneInfo(tz_name)).replace(minute=0, second=0, microsecond=0).astimezone(timezone.utc)
-        start = current_hour - timedelta(hours=23)
+        start = current_hour - timedelta(hours=47)
         intervals = [{"start_at": (start + timedelta(hours=i)).isoformat(),
                       "end_at": (start + timedelta(hours=i + 1)).isoformat(),
-                      "partial": i == 23} for i in range(24)]
+                      "partial": i == 47} for i in range(48)]
         buckets = {sku: [{"quantity": 0, "refunded_quantity": 0, "orders": set()} for _ in intervals] for sku in TRACKED_SKUS}
         overall = [set() for _ in intervals]
         with self.connect() as db:
@@ -144,7 +144,7 @@ class Store:
             if row["sku"] not in buckets:
                 continue
             index = int((parse_date(row["created_at"]) - start).total_seconds() // 3600)
-            if not 0 <= index < 24:
+            if not 0 <= index < 48:
                 continue
             bucket = buckets[row["sku"]][index]
             bucket["quantity"] += row["quantity"]
@@ -158,7 +158,7 @@ class Store:
                 "end_at": intervals[-1]["end_at"], "observed_until": now.isoformat(),
                 "hourly": [{**intervals[i], "quantity": sum(buckets[sku][i]["quantity"] for sku in TRACKED_SKUS),
                             "refunded_quantity": sum(buckets[sku][i]["refunded_quantity"] for sku in TRACKED_SKUS),
-                            "orders": len(overall[i])} for i in range(24)], "skus": series}
+                            "orders": len(overall[i])} for i in range(48)], "skus": series}
 
     def dashboard(self, days, tz_name, now=None):
         now = now or utcnow()
@@ -219,4 +219,4 @@ class Store:
                            "quantity": sum(p["quantity"] for p in buckets.values()), "orders": len(all_orders),
                            "refunded_quantity": sum(p["refunded_quantity"] for p in buckets.values()),
                            "authorized_orders": len(all_authorized_orders)},
-                "daily": daily, "skus": serialized, "last_24_hours": self.hourly(tz_name, now)}
+                "daily": daily, "skus": serialized, "last_48_hours": self.hourly(tz_name, now)}
