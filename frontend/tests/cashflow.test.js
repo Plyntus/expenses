@@ -4,9 +4,56 @@ const test = require("node:test");
 const {
   aggregateCashflowSankey,
   aggregateMonthlyCashflow,
+  buildCashflowSankeyTrace,
+  cashflowIncomeTransactions,
   matchesSelectedCategories,
   setExchangeRatesForTests,
 } = require("../static/app.js");
+
+test("income details contain only positive movements from the selected sources, newest first", () => {
+  const movements = [
+    { date: "2026-10-01", amount: "100", category: "Зарплата" },
+    { date: "2026-10-02", amount: "-25", category: "Зарплата" },
+    { date: "2026-10-03", amount: "0", category: "Зарплата" },
+    { date: "2026-10-04", amount: "50", category: " Фриланс " },
+    { date: "2026-10-05", amount: "200", category: "Зарплата" },
+    { date: "2026-10-06", amount: "10", category: null },
+  ];
+  assert.deepEqual(cashflowIncomeTransactions(movements, []).map((row) => row.date), [
+    "2026-10-06", "2026-10-05", "2026-10-04", "2026-10-01",
+  ]);
+  assert.deepEqual(cashflowIncomeTransactions(movements, ["Зарплата", "Фриланс"]), [
+    movements[4], movements[3], movements[0],
+  ]);
+  assert.deepEqual(cashflowIncomeTransactions(movements, ["Прочие поступления"]), [movements[5]]);
+  assert.deepEqual(cashflowIncomeTransactions([], []), []);
+  assert.equal(movements[0].date, "2026-10-01");
+});
+
+test("Sankey income nodes and links retain their exact sources when grouped or resized", () => {
+  setExchangeRatesForTests({ EUR: 1 });
+  const flow = aggregateCashflowSankey([
+    ...Array.from({ length: 7 }, (_, index) => ({
+      amount: String(700 - index * 100), currency: "EUR", category: `Источник ${index}`,
+    })),
+    { amount: "-4000", currency: "EUR", category: "Покупки" },
+  ], "EUR");
+  const desktop = buildCashflowSankeyTrace(flow, "EUR", 1200);
+  const nodeSources = desktop.node.customdata.map((data) => data[1]);
+  assert.deepEqual(nodeSources.slice(0, 5), [
+    ["Источник 0"], ["Источник 1"], ["Источник 2"], ["Источник 3"],
+    ["Источник 4", "Источник 5", "Источник 6"],
+  ]);
+  assert.equal(nodeSources[5], null); // Deficit is not an incoming transaction.
+  assert.deepEqual(nodeSources[6], []); // The hub opens all income.
+  assert.equal(nodeSources[7], null); // Expenses do not open income details.
+  assert.deepEqual(desktop.link.customdata.slice(0, 5).map((data) => data[1]), nodeSources.slice(0, 5));
+  assert.ok(desktop.link.customdata.slice(5).every((data) => data[1] === null));
+
+  const mobile = buildCashflowSankeyTrace(flow, "EUR", 390);
+  assert.deepEqual(mobile.node.customdata[0][1], []);
+  assert.deepEqual(mobile.link.customdata[0][1], []);
+});
 
 test("strictly filters income and expenses by selected categories", () => {
   const selectedCategories = new Set(["Жильё"]);

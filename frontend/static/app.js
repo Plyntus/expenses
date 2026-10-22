@@ -67,6 +67,7 @@ let dashboardState = {
   expenses: [],
   movements: [],
   selectedCategory: null,
+  selectedCashflowIncomeSources: null,
   collapsedCategories: new Set(),
   convertToEur: false,
   exchangeRates: null,
@@ -970,40 +971,52 @@ function buildCashflowSankeyTrace(flow, currency, chartWidth) {
 
   const nodes = [];
   const links = [];
-  function addNode(name, value, shareTotal, color, x) {
+  function addNode(name, value, shareTotal, color, x, incomeSources = null) {
     const index = nodes.length;
     nodes.push({
       name,
       value,
       color,
       x,
+      incomeSources,
       label: cashflowNodeLabel(name, value, shareTotal, currency, compact),
       hover: `${escapeChartText(name)}<br>${formatMoney(value, currency)}<br>${formatPercent(value, shareTotal)}`,
     });
     return index;
   }
-  function addLink(source, target, value, color) {
+  function addLink(source, target, value, color, incomeSources = null) {
     links.push({
       source,
       target,
       value,
       color,
+      incomeSources,
       hover: `${escapeChartText(nodes[source].name)} → ${escapeChartText(nodes[target].name)}<br>${formatMoney(value, currency)}`,
     });
   }
 
-  const sourceIndexes = sources.map((source) => ({
+  const sourceIndexes = sources.map((source, index) => ({
     item: source,
-    index: addNode(source.name, source.total, flow.totalIncome, "#2AA8B8", 0.01),
+    index: addNode(
+      source.name, source.total, flow.totalIncome, "#2AA8B8", 0.01,
+      !showIncomeSources
+        ? []
+        : flow.incomeSources.length > 5 && index === sources.length - 1
+          ? flow.incomeSources.slice(4).map((item) => item.name)
+          : [source.name],
+    ),
   }));
   const deficitIndex = deficit > 0
     ? addNode("Дефицит периода", deficit, distributedTotal, "#C65D4B", 0.01)
     : null;
   const hubName = deficit > 0 ? "Распределено" : "Доходы";
-  const hubIndex = addNode(hubName, distributedTotal, distributedTotal, "#168AAD", 0.26);
+  const hubIndex = addNode(hubName, distributedTotal, distributedTotal, "#168AAD", 0.26, []);
 
   for (const source of sourceIndexes) {
-    addLink(source.index, hubIndex, source.item.total, hexToRgba("#2AA8B8", 0.24));
+    addLink(
+      source.index, hubIndex, source.item.total, hexToRgba("#2AA8B8", 0.24),
+      nodes[source.index].incomeSources,
+    );
   }
   if (deficitIndex != null) {
     addLink(deficitIndex, hubIndex, deficit, hexToRgba("#C65D4B", 0.3));
@@ -1051,7 +1064,7 @@ function buildCashflowSankeyTrace(flow, currency, chartWidth) {
   return {
     type: "sankey",
     orientation: "h",
-    arrangement: "snap",
+    arrangement: "fixed",
     valueformat: ",.2f",
     valuesuffix: ` ${currency}`,
     node: {
@@ -1059,8 +1072,8 @@ function buildCashflowSankeyTrace(flow, currency, chartWidth) {
       thickness: compact ? 12 : 15,
       line: { color: "rgba(255, 255, 255, 0.92)", width: 1.5 },
       label: nodes.map((node) => node.label),
-      customdata: nodes.map((node) => node.hover),
-      hovertemplate: "%{customdata}<extra></extra>",
+      customdata: nodes.map((node) => [node.hover, node.incomeSources]),
+      hovertemplate: "%{customdata[0]}<extra></extra>",
       color: nodes.map((node) => node.color),
       x: nodes.map((node) => node.x),
     },
@@ -1069,8 +1082,8 @@ function buildCashflowSankeyTrace(flow, currency, chartWidth) {
       target: links.map((link) => link.target),
       value: links.map((link) => link.value),
       color: links.map((link) => link.color),
-      customdata: links.map((link) => link.hover),
-      hovertemplate: "%{customdata}<extra></extra>",
+      customdata: links.map((link) => [link.hover, link.incomeSources]),
+      hovertemplate: "%{customdata[0]}<extra></extra>",
     },
   };
 }
@@ -1141,7 +1154,8 @@ function renderCashflowSankey(filteredMovements) {
     ? Math.max(520, Math.min(820, visibleCategoryCount * 76 + 180))
     : Math.max(440, Math.min(640, visibleCategoryCount * 62 + 170));
 
-  Plotly.react(
+  // Rebuild fixed Sankey nodes so their positions are recalculated on resize.
+  Plotly.newPlot(
     "cashflowChart",
     traces,
     {
@@ -1169,6 +1183,50 @@ function renderCashflowSankey(filteredMovements) {
     },
     { displayModeBar: false, responsive: true },
   );
+  if (typeof chartElement.removeAllListeners === "function") {
+    chartElement.removeAllListeners("plotly_click");
+  }
+  chartElement.on("plotly_click", (event) => {
+    const point = event.points?.[0];
+    const sources = point?.customdata?.[1];
+    if (!Array.isArray(sources)) return;
+    dashboardState.selectedCashflowIncomeSources = sources;
+    renderCashflowDetails(filteredMovements);
+  });
+}
+
+function cashflowIncomeTransactions(movements, selectedSources) {
+  const sources = new Set(selectedSources);
+  return movements
+    .filter((movement) => signedAmount(movement) > 0 && (
+      !sources.size || sources.has(normalizeText(movement.category, FALLBACK_INCOME_SOURCE))
+    ))
+    .sort((left, right) => String(right.date).localeCompare(String(left.date)));
+}
+
+function renderCashflowDetails(filteredMovements) {
+  const section = document.getElementById("cashflowDetailsSection");
+  const tbody = document.getElementById("cashflowTransactionRows");
+  const sources = dashboardState.selectedCashflowIncomeSources;
+  const expanded = sources !== null;
+  document.getElementById("cashflowIncomeButton").setAttribute("aria-expanded", String(expanded));
+  section.classList.toggle("is-hidden", !expanded);
+  tbody.innerHTML = "";
+  if (!expanded) return;
+
+  document.getElementById("cashflowDetailsTitle").textContent = sources.length
+    ? `Операции доходов: ${sources.join(", ")}`
+    : "Операции доходов за выбранный период";
+  const rows = cashflowIncomeTransactions(filteredMovements, sources);
+  renderTransactionRows(tbody, rows);
+  if (!rows.length) {
+    const row = document.createElement("tr");
+    const cell = document.createElement("td");
+    cell.colSpan = 5;
+    cell.textContent = "Нет доходов для выбранных фильтров";
+    row.appendChild(cell);
+    tbody.appendChild(row);
+  }
 }
 
 function transactionBelongsToSelectedCategory(expense, selectedCategory, collapsedCategories) {
@@ -1204,6 +1262,11 @@ function renderDetails(filteredExpenses) {
   }
 
   document.getElementById("detailsTitle").textContent = `Транзакции категории: ${selectedCategory}`;
+  renderTransactionRows(tbody, rows);
+  section.classList.remove("is-hidden");
+}
+
+function renderTransactionRows(tbody, rows) {
   for (const expense of rows) {
     const tr = document.createElement("tr");
     const values = [
@@ -1220,7 +1283,6 @@ function renderDetails(filteredExpenses) {
     }
     tbody.appendChild(tr);
   }
-  section.classList.remove("is-hidden");
 }
 
 function formatBalanceValue(balance) {
@@ -1443,6 +1505,7 @@ function renderDashboard() {
   }
   if (dashboardState.activeView === "cashflow") {
     renderCashflowSankey(filteredMovements);
+    renderCashflowDetails(filteredMovements);
   }
   if (dashboardState.activeView === "balance") {
     renderBalance();
@@ -1482,6 +1545,7 @@ async function syncFromSheets() {
   try {
     await api("/api/sync/google-sheets", { method: "POST" });
     dashboardState.selectedCategory = null;
+    dashboardState.selectedCashflowIncomeSources = null;
     await loadDashboard();
   } catch (error) {
     const box = document.getElementById("syncError");
@@ -1503,6 +1567,7 @@ function resetFilters() {
   }
   document.getElementById("minCategoryTotal").value = "";
   dashboardState.selectedCategory = null;
+  dashboardState.selectedCashflowIncomeSources = null;
   renderFilterOptions();
   renderDashboard();
 }
@@ -1611,6 +1676,10 @@ if (typeof document !== "undefined") {
   document.getElementById("resetBalanceFilters").addEventListener("click", resetBalanceFilters);
   document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
   document.getElementById("cashflowTab").addEventListener("click", () => setActiveView("cashflow"));
+  document.getElementById("cashflowIncomeButton").addEventListener("click", () => {
+    dashboardState.selectedCashflowIncomeSources = [];
+    renderCashflowDetails(filterExpenses(dashboardState.movements));
+  });
   document.getElementById("balanceTab").addEventListener("click", () => setActiveView("balance"));
   document.getElementById("convertToEur").addEventListener("change", handleConvertToEurChange);
   document.getElementById("currencyFilter").addEventListener("change", handleDisplayCurrencyChange);
@@ -1633,6 +1702,8 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aggregateCashflowSankey,
     aggregateMonthlyCashflow,
+    buildCashflowSankeyTrace,
+    cashflowIncomeTransactions,
     matchesSelectedCategories,
     setExchangeRatesForTests(rates) {
       dashboardState.exchangeRates = { base: "EUR", rates };

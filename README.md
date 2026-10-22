@@ -205,11 +205,16 @@ month's income and expense totals. The tab shares the expense view's date, accou
 excluded-category, and display-currency filters; cross-currency amounts use the
 same exchange-rate conversion logic.
 
+Click the income total or an income source in the Sankey diagram to show its
+transactions below the chart. The table follows the active filters and lists
+income operations newest first, with their original amounts and currencies.
+
 Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed explicitly in the budget sheet, with amounts converted to the budget currency.
 
 Categories excluded from Telegram reports are configured directly in
 `TELEGRAM_REPORT_EXCLUDED_CATEGORIES` in `backend/app/core/config.py`. The default
-list contains both transfer category forms, `Перевод` and `Переводы`; `/filter`
+list contains both transfer category forms, `Перевод` and `Переводы`, and
+`Бизнес Даши`; `/filter`
 displays the active list but does not modify it.
 
 If the chat id is not configured yet, send `/start` to the bot and use the chat id shown in the reply.

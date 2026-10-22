@@ -1,17 +1,48 @@
 from datetime import date
 from decimal import Decimal
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
+
+from app.core.config import TELEGRAM_REPORT_EXCLUDED_CATEGORIES
 
 from app.telegram_bot.daily_report import (
     BudgetCategorySpend,
     ExchangeRates,
     _format_budget_category_spending,
     build_daily_report_message,
+    parse_budget_sheet,
 )
 
 
 class DailyReportBudgetTests(unittest.TestCase):
+    def test_default_exclusions_remove_business_and_transfers_from_entire_report(self) -> None:
+        db = Mock()
+        db.execute.return_value.all.return_value = [
+            ("EUR", "Питание", Decimal("-100"), date(2026, 10, 1)),
+            ("EUR", "Прочее", Decimal("-25"), date(2026, 10, 2)),
+            ("EUR", "  бизнес   ДАШИ ", Decimal("-900"), date(2026, 10, 20)),
+            ("EUR", "Перевод", Decimal("-500"), date(2026, 10, 21)),
+            ("EUR", "Переводы", Decimal("-500"), date(2026, 10, 22)),
+        ]
+        message = build_daily_report_message(
+            db=db,
+            report_date=date(2026, 10, 23),
+            budget_categories=parse_budget_sheet([
+                ["Category", "Budget", "Currency"],
+                ["Питание", "200", "EUR"],
+                ["Бизнес Даши", "1000", "EUR"],
+                ["Остальное", "100", "EUR"],
+            ]),
+            exchange_rates=ExchangeRates("EUR", {"EUR": Decimal("1")}),
+            excluded_categories=TELEGRAM_REPORT_EXCLUDED_CATEGORIES,
+        )
+
+        self.assertIn("потрачено 125 EUR. Последняя дата: 2 октября.", message)
+        self.assertIn("Питание: 100 (50%)", message)
+        self.assertIn("Остальное: 25 (25%)", message)
+        self.assertNotIn("Бизнес Даши", message)
+        self.assertNotIn("Перевод", message)
+
     def test_category_line_includes_budget_amount_currency_and_percentage(self) -> None:
         lines = _format_budget_category_spending(
             [

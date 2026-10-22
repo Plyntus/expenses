@@ -97,10 +97,10 @@
           </header>
 
           <div class="cashflow-metrics" aria-label="Итоги денежного потока">
-            <article class="cashflow-metric cashflow-metric-income">
+            <button id="cashflowIncomeButton" class="cashflow-metric cashflow-metric-income" type="button" aria-expanded="false" aria-controls="cashflowDetailsSection">
               <span>Доходы</span>
               <strong id="cashflowIncome">—</strong>
-            </article>
+            </button>
             <article class="cashflow-metric cashflow-metric-expenses">
               <span>Расходы</span>
               <strong id="cashflowExpenses">—</strong>
@@ -122,7 +122,7 @@
             <span><i class="legend-dot legend-dot-expense"></i>Расходы</span>
             <span><i class="legend-dot legend-dot-result"></i>Остаток или дефицит</span>
           </div>
-          <p class="chart-help">Толщина линии соответствует сумме. Наведите или нажмите на поток, чтобы увидеть детали.</p>
+          <p class="chart-help">Толщина линии соответствует сумме. Нажмите на «Доходы» или источник поступлений, чтобы увидеть операции ниже.</p>
           <div class="sr-only">
             <table>
               <caption>Источники дохода, категории расходов и итог периода</caption>
@@ -135,6 +135,23 @@
                 </tr>
               </thead>
               <tbody id="cashflowTableRows"></tbody>
+            </table>
+          </div>
+        </section>
+        <section id="cashflowDetailsSection" class="panel table-panel is-hidden" aria-labelledby="cashflowDetailsTitle">
+          <h2 id="cashflowDetailsTitle" aria-live="polite">Операции доходов</h2>
+          <div class="table-wrap">
+            <table class="transaction-table">
+              <thead>
+                <tr>
+                  <th>Дата</th>
+                  <th>Счет</th>
+                  <th>Сумма</th>
+                  <th>Валюта</th>
+                  <th>Комментарий</th>
+                </tr>
+              </thead>
+              <tbody id="cashflowTransactionRows"></tbody>
             </table>
           </div>
         </section>

@@ -469,6 +469,24 @@ a:focus-visible,
   color: #087c8b;
 }
 
+button.cashflow-metric-income {
+  width: 100%;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+button.cashflow-metric-income:hover,
+button.cashflow-metric-income[aria-expanded="true"] {
+  background: #eef9fb;
+  border-color: #168aad;
+}
+
+button.cashflow-metric-income:focus-visible {
+  outline: 2px solid #168aad;
+  outline-offset: 3px;
+}
+
 .cashflow-metric-expenses strong,
 .cashflow-metric-result.is-deficit strong {
   color: #a94334;
