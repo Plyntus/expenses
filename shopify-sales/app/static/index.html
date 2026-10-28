@@ -20,7 +20,7 @@
 </header>
 <main id="main">
   <section class="page-heading" aria-labelledby="page-title">
-    <div class="hero-copy"><p class="eyebrow">PRE-ORDER ANALYTICS</p><h1 id="page-title">Flipper One<span>Pre-order dashboard<span class="heading-dot">.</span></span></h1><p id="shop-name" class="muted">Three SKUs · tracked separately</p>
+    <div class="hero-copy"><p class="eyebrow">PRE-ORDER ANALYTICS</p><h1 id="page-title">Flipper One<span>Pre-order dashboard<span class="heading-dot">.</span></span></h1><p id="shop-name" class="muted">Four SKUs · tracked separately</p>
       <div class="actions"><label for="period">Date range</label><select id="period"><option value="1">Today</option><option value="7" selected>Last 7 days</option><option value="30">Last 30 days</option></select></div>
     </div>
     <div class="product-image"><img src="/assets/flipper-one.png" width="540" height="540" fetchpriority="high" alt="Flipper One in its clear limited developer edition display box"></div>
@@ -30,7 +30,7 @@
     <span class="step-tag">CONNECTION SETUP</span><h2>Connect your Shopify store</h2>
     <p>Create an app in Shopify Dev Dashboard with <code>read_orders</code> and <code>read_products</code> access, and install it on a store in the same organization.</p>
     <p>Set <code>SHOPIFY_SHOP</code>, <code>SHOPIFY_CLIENT_ID</code> and <code>SHOPIFY_CLIENT_SECRET</code> in this application's Coolify environment variables, then redeploy.</p>
-    <p class="muted">Your three SKUs are already configured. Their history will load automatically once connected.</p>
+    <p class="muted">Your four SKUs are already configured. Their history will load automatically once connected.</p>
   </section>
   <section class="panel traffic-panel" aria-labelledby="traffic-title">
     <div class="traffic-copy"><p class="eyebrow">SHOPIFY ANALYTICS</p><h2 id="traffic-title">Landing page sessions</h2><p class="traffic-path"><code>/pages/flipper-one/</code></p><p class="muted">Sessions starting on this page · <span id="traffic-period">Last 7 days</span></p><p id="traffic-status" class="traffic-status" role="status">Waiting for Shopify analytics</p></div>
@@ -50,7 +50,7 @@
     </section>
     <details class="panel details"><summary>Daily breakdown by SKU</summary><div class="table-scroll"><table><thead><tr><th scope="col">Date</th><th scope="col">SKU</th><th scope="col">Units</th><th scope="col">Orders</th><th scope="col">Refunded</th><th scope="col">Authorized</th></tr></thead><tbody id="daily-table"></tbody></table></div></details>
   </div>
-  <footer><p id="updated" aria-live="polite">Waiting for the first sync</p><p>Refreshes every 60 seconds · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Units are net of refunds and removed items. Orders include fully refunded orders. Refunded counts units recorded in Shopify product refunds, including refunds on cancelled orders; shipping-only and unallocated refunds are excluded. Authorized, paid and partially paid pre-orders are included. Test, pending, expired, voided and cancelled orders without product refunds are excluded. All metrics use the original order date. Only FLP-O-COUPON-349, FLP-O-COUPON-399 and FLP-O-COUPON-449 line items are included. An order containing multiple tracked SKUs is counted once under each SKU.</p></footer>
+  <footer><p id="updated" aria-live="polite">Waiting for the first sync</p><p>Refreshes every 60 seconds · <span id="tz">Europe/Belgrade</span></p><p class="footnote">Units are net of refunds and removed items. Orders include fully refunded orders. Refunded counts units recorded in Shopify product refunds, including refunds on cancelled orders; shipping-only and unallocated refunds are excluded. Authorized, paid and partially paid pre-orders are included. Test, pending, expired, voided and cancelled orders without product refunds are excluded. All metrics use the original order date. Only FLP-O-COUPON-349, FLP-O-COUPON-399, FLP-O-COUPON-449 and FLP-O-COUPON-379 line items are included. An order containing multiple tracked SKUs is counted once under each SKU.</p></footer>
 </main>
 </body>
 </html>

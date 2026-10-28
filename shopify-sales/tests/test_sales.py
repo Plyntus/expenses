@@ -59,8 +59,8 @@ class StoreTests(unittest.TestCase):
         self.assertEqual(len(self.dashboard()["daily"]), 7)
         skus = self.dashboard()["skus"]
         self.assertEqual([s["sku"] for s in skus], list(TRACKED_SKUS))
-        self.assertEqual([s["revenue"] for s in skus], [18.9, 0.1, 0])
-        self.assertEqual([s["orders"] for s in skus], [1, 1, 0])
+        self.assertEqual([s["revenue"] for s in skus], [18.9, 0.1, 0, 0])
+        self.assertEqual([s["orders"] for s in skus], [1, 1, 0, 0])
         self.assertEqual(skus[0]["daily"][-1]["orders"], 1)
 
     def test_partial_then_full_refund_and_cancel_replace_original(self):
@@ -103,8 +103,8 @@ class StoreTests(unittest.TestCase):
         data = self.dashboard()
         self.assertEqual(data['totals']['quantity'], 6)
         self.assertEqual(data['totals']['orders'], 1)
-        self.assertEqual([s['refunded_quantity'] for s in data['skus']], [4, 0, 0])
-        self.assertEqual([s['orders'] for s in data['skus']], [1, 1, 0])
+        self.assertEqual([s['refunded_quantity'] for s in data['skus']], [4, 0, 0, 0])
+        self.assertEqual([s['orders'] for s in data['skus']], [1, 1, 0, 0])
         # Editing down to zero keeps the original order but does not invent a refund.
         self.store.upsert_orders([order(lines=[line('a', quantity=0, original=4)])])
         self.assertEqual(self.dashboard()['totals']['orders'], 1)
@@ -143,7 +143,7 @@ class StoreTests(unittest.TestCase):
             lines=[line(name, quantity=quantity, sku=sku)]) for name, stamp, quantity, sku in samples])
         data = self.store.hourly("Europe/Belgrade", now)
         self.assertEqual(len(data["hourly"]), 48)
-        self.assertEqual([len(s["hourly"]) for s in data["skus"]], [48, 48, 48])
+        self.assertEqual([len(s["hourly"]) for s in data["skus"]], [48, 48, 48, 48])
         self.assertEqual(data["start_at"], start.isoformat())
         self.assertEqual(data["end_at"], (NOW + timedelta(hours=1)).isoformat())
         self.assertEqual(data["observed_until"], now.isoformat())
@@ -233,19 +233,19 @@ class StoreTests(unittest.TestCase):
     def test_order_edit_removes_previous_sku_and_untracked_orders(self):
         self.store.upsert_orders([order()])
         self.store.upsert_orders([order(lines=[line(sku="FLP-O-COUPON-399")])])
-        self.assertEqual([s["quantity"] for s in self.dashboard()["skus"]], [0, 2, 0])
+        self.assertEqual([s["quantity"] for s in self.dashboard()["skus"]], [0, 2, 0, 0])
         self.store.upsert_orders([order(lines=[line(sku="UNTRACKED")])])
         self.assertEqual(self.dashboard()["totals"]["quantity"], 0)
         with self.store.connect() as db:
             self.assertEqual(db.execute("SELECT count(*) FROM orders").fetchone()[0], 0)
 
-    def test_only_three_requested_coupons_are_counted_separately(self):
+    def test_only_four_requested_coupons_are_counted_separately(self):
         self.store.upsert_orders([order(lines=[line(str(i), P1, str((i + 1) * 10), i + 1, sku=sku)
-                                              for i, sku in enumerate((*TRACKED_SKUS, "FLP-O-COUPON-379", "FLP-O-COUPON-499"))])])
+                                              for i, sku in enumerate((*TRACKED_SKUS, "FLP-O-COUPON-499"))])])
         data = self.dashboard()
-        self.assertEqual([s["quantity"] for s in data["skus"]], [1, 2, 3])
-        self.assertEqual([s["revenue"] for s in data["skus"]], [10, 20, 30])
-        self.assertEqual([s["daily"][-1]["quantity"] for s in data["skus"]], [1, 2, 3])
+        self.assertEqual([s["quantity"] for s in data["skus"]], [1, 2, 3, 4])
+        self.assertEqual([s["revenue"] for s in data["skus"]], [10, 20, 30, 40])
+        self.assertEqual([s["daily"][-1]["quantity"] for s in data["skus"]], [1, 2, 3, 4])
         self.assertEqual(data["totals"]["orders"], 1)
 
     def test_multiple_lines_of_one_sku_count_one_order(self):
@@ -283,7 +283,7 @@ class StoreTests(unittest.TestCase):
             line("a", sku=TRACKED_SKUS[0]), line("b", sku=TRACKED_SKUS[1])])])
         data = self.dashboard()
         self.assertEqual(data["totals"]["authorized_orders"], 1)
-        self.assertEqual([s["authorized_orders"] for s in data["skus"]], [1, 1, 0])
+        self.assertEqual([s["authorized_orders"] for s in data["skus"]], [1, 1, 0, 0])
 
     def test_invalid_page_rolls_back(self):
         self.store.upsert_orders([order()])
@@ -347,7 +347,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual([s["sku"] for s in data["skus"]], list(TRACKED_SKUS))
         self.assertTrue(all(s["quantity"] == 0 for s in data["skus"]))
         self.assertEqual(len(data["last_48_hours"]["hourly"]), 48)
-        self.assertEqual(len(data["last_48_hours"]["skus"]), 3)
+        self.assertEqual(len(data["last_48_hours"]["skus"]), 4)
         self.assertEqual(self.client.get("/api/products", auth=self.auth).status_code, 404)
         self.assertEqual(self.client.put("/api/products", json={"products": []}, auth=self.auth,
                                          headers={"X-Sales-Request": "1"}).status_code, 404)
@@ -382,10 +382,10 @@ class ShopifyTests(unittest.IsolatedAsyncioTestCase):
             store = Store(path)
             self.assertIsNone(store.get('checkpoint'))
             self.assertIsNone(store.get('last_success'))
-            self.assertEqual(store.get('tracked_skus'), ['FLP-O-COUPON-349', 'FLP-O-COUPON-399', 'FLP-O-COUPON-449'])
+            self.assertEqual(store.get('tracked_skus'), ['FLP-O-COUPON-349', 'FLP-O-COUPON-399', 'FLP-O-COUPON-449', 'FLP-O-COUPON-379'])
             self.assertEqual(store.get('traffic_data'), {'sessions': 123})
             with store.connect() as db:
-                self.assertEqual(db.execute('SELECT count(*) FROM orders').fetchone()[0], 0)
+                self.assertEqual(db.execute('SELECT count(*) FROM orders').fetchone()[0], 1)
 
             class FakeShopify:
                 fail = True
@@ -413,7 +413,7 @@ class ShopifyTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(all(all(f"sku:'{sku}'" in search for sku in TRACKED_SKUS) for search in fake.searches))
             self.assertEqual(store.get('checkpoint'), NOW.isoformat())
             self.assertIsNotNone(store.get('last_success'))
-            self.assertEqual(store.dashboard(7, 'UTC', NOW)['totals']['orders'], 1)
+            self.assertEqual(store.dashboard(7, 'UTC', NOW)['totals']['orders'], 2)
             # Once imported, an unchanged scope must preserve its checkpoint.
             self.assertEqual(Store(path).get('checkpoint'), NOW.isoformat())
             with patch('app.sync.utcnow', return_value=NOW):
