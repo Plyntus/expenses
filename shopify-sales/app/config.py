@@ -5,10 +5,7 @@ from zoneinfo import ZoneInfo
 
 PRODUCT_TITLE = "Flipper One Pre-order"
 TRACKED_SKUS = (
-    "FLP-O-COUPON-349",
-    "FLP-O-COUPON-399",
-    "FLP-O-COUPON-449",
-    "FLP-O-COUPON-499",
+    "FLP-O-COUPON-379",
 )
 
 

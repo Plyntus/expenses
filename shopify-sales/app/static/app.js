@@ -20,7 +20,7 @@ async function api(path) {
 function notice(text) { $('notice').textContent = text || ''; $('notice').hidden = !text; }
 function statusView(s) {
   $('setup').hidden = s.configured;
-  $('shop-name').textContent = `${s.shop || 'Shopify'} · four SKUs, tracked separately`;
+  $('shop-name').textContent = `${s.shop || 'Shopify'} · ${s.tracked_skus.join(', ')}`;
   $('tz').textContent = s.timezone;
   const last = s.last_success && new Date(s.last_success);
   const stale = !last || Date.now() - last.getTime() > s.poll_seconds * 3000;
@@ -28,7 +28,7 @@ function statusView(s) {
   $('connection').className = 'connection' + (s.configured && !stale && !s.last_error ? ' live' : '');
   $('updated').textContent = last ? `Last updated ${new Intl.DateTimeFormat('en-US', {dateStyle: 'medium', timeStyle: 'medium', timeZone: s.timezone}).format(last)}` : s.syncing ? `Initial import: ${fmt.format(s.imported_orders)} orders checked` : 'Waiting for the first sync';
   if (s.last_error) notice((last ? 'Your last successful data is preserved. ' : 'Data has not loaded yet. ') + s.last_error);
-  else if (s.configured && !last) notice(s.syncing ? 'Loading history for your four SKUs. The first sync may take a few minutes.' : 'Waiting for the first Shopify import.');
+  else if (s.configured && !last) notice(s.syncing ? 'Loading coupon history. The first sync may take a few minutes.' : 'Waiting for the first Shopify import.');
   else if (s.configured && stale) notice('Data has not updated recently. Check the Shopify connection and application logs in Coolify.');
   else if (s.configured && !s.refunds_ready) notice('Importing refund history. Refunded counts will appear when the import is complete.');
   else notice('');

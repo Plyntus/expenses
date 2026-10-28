@@ -54,6 +54,14 @@ class Store:
             db.execute(f"DELETE FROM lines WHERE sku NOT IN ({placeholders})", TRACKED_SKUS)
             db.execute("DELETE FROM orders WHERE NOT EXISTS (SELECT 1 FROM lines WHERE order_id=orders.id)")
             db.execute("DROP TABLE IF EXISTS products")
+            scope = db.execute("SELECT value FROM state WHERE key='tracked_skus'").fetchone()
+            if scope is None or json.loads(scope[0]) != list(TRACKED_SKUS):
+                # The previous checkpoint cannot discover unchanged orders for a new
+                # SKU. Persist the new scope and force a complete, restart-safe import.
+                db.execute("""DELETE FROM state WHERE key IN
+                    ('checkpoint','import_history_days','last_success','last_error','sync_progress')""")
+                db.execute("INSERT OR REPLACE INTO state VALUES ('tracked_skus', ?)",
+                           (json.dumps(list(TRACKED_SKUS)),))
 
     @contextmanager
     def connect(self):
