@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import timedelta
 
+from .config import TRACKED_SKUS
 from .shopify import ShopifyError
 from .store import parse_date, utcnow
 
@@ -36,6 +37,9 @@ class Sync:
                 lower = parse_date(checkpoint) - timedelta(minutes=5)
                 search += f" updated_at:>='{lower.isoformat()}'"
             else:
+                # Limit the initial history import to matching orders. Incremental
+                # polls stay unfiltered so edits that remove the coupon are caught.
+                search += " (" + " OR ".join(f"sku:'{sku}'" for sku in TRACKED_SKUS) + ")"
                 info = await self.shopify.graphql("query { shop { currencyCode ianaTimezone name } }")
                 self.store.set("currency", info["shop"]["currencyCode"])
                 self.store.set("shop_name", info["shop"]["name"])

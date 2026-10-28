@@ -410,11 +410,15 @@ class ShopifyTests(unittest.IsolatedAsyncioTestCase):
                 store = Store(path)
                 await Sync(settings, store, fake).once()
             self.assertTrue(all(' updated_at:>=' not in search for search in fake.searches))
+            self.assertTrue(all("sku:'FLP-O-COUPON-379'" in search for search in fake.searches))
             self.assertEqual(store.get('checkpoint'), NOW.isoformat())
             self.assertIsNotNone(store.get('last_success'))
             self.assertEqual(store.dashboard(7, 'UTC', NOW)['totals']['orders'], 1)
             # Once imported, an unchanged scope must preserve its checkpoint.
             self.assertEqual(Store(path).get('checkpoint'), NOW.isoformat())
+            with patch('app.sync.utcnow', return_value=NOW):
+                await Sync(settings, store, fake).once()
+            self.assertNotIn('sku:', fake.searches[-1])
 
     async def test_refund_migration_repairs_unchanged_cached_orders_before_checkpoint(self):
         with tempfile.TemporaryDirectory() as tmp:
