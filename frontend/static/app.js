@@ -568,6 +568,42 @@ function monthLabel(monthKey) {
   return monthFormatter.format(new Date(Date.UTC(year, month - 1, 1))).replace(" г.", "");
 }
 
+function aggregateMonthlyExpenses(expenses, minCategoryTotal, targetCurrency, { dateFrom = "", dateTo = "" } = {}) {
+  const { categories, collapsedCategories } = aggregateForChart(expenses, minCategoryTotal, targetCurrency);
+  const grouped = new Map();
+  for (const expense of expenses) {
+    const month = String(expense.date || "").slice(0, 7);
+    if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month)) continue;
+    const amount = expenseAmountInCurrency(expense, targetCurrency);
+    if (amount == null || !amount) continue;
+    const category = collapseCategory(normalizeText(expense.category, FALLBACK_CATEGORY), collapsedCategories);
+    if (!grouped.has(month)) grouped.set(month, new Map());
+    const totals = grouped.get(month);
+    totals.set(category, (totals.get(category) || 0) + amount);
+  }
+
+  const recordedMonths = [...grouped.keys()].sort();
+  if (!recordedMonths.length) return { months: [], totals: [], categories: [] };
+  const firstMonth = dateFrom.slice(0, 7) || recordedMonths[0];
+  const lastMonth = dateTo.slice(0, 7) || recordedMonths.at(-1);
+  const months = [];
+  for (let month = firstMonth; month <= lastMonth;) {
+    months.push(month);
+    const [year, monthNumber] = month.split("-").map(Number);
+    month = monthNumber === 12
+      ? `${year + 1}-01`
+      : `${year}-${String(monthNumber + 1).padStart(2, "0")}`;
+  }
+  return {
+    months,
+    totals: months.map((month) => [...(grouped.get(month)?.values() || [])].reduce((total, value) => total + value, 0)),
+    categories: categories.map(({ category }) => ({
+      category,
+      totals: months.map((month) => grouped.get(month)?.get(category) || 0),
+    })),
+  };
+}
+
 function aggregateMonthlyCashflow(movements, targetCurrency) {
   const grouped = new Map();
   for (const movement of movements) {
@@ -885,6 +921,103 @@ function renderChart(filteredExpenses) {
     dashboardState.selectedCategory = point?.y || null;
     renderDetails(filteredExpenses);
   });
+}
+
+function renderMonthlyExpenses(filteredExpenses) {
+  const currency = getDisplayCurrency();
+  const filters = getFilters();
+  const chartElement = document.getElementById("monthlyChart");
+  const chartWidth = chartElement.clientWidth || window.innerWidth;
+  const compact = chartWidth < 700;
+  const status = expenseConversionStatus(filteredExpenses, currency);
+  const series = status.ready
+    ? aggregateMonthlyExpenses(filteredExpenses, filters.minCategoryTotal, currency, filters)
+    : { months: [], totals: [], categories: [] };
+  const hasData = series.months.length > 0;
+  const message = status.ready ? "Нет расходов для выбранных фильтров" : status.message;
+
+  document.getElementById("monthlyPeriod").textContent = selectedPeriodLabel();
+  document.getElementById("monthlyAmountHeader").textContent = `Расходы, ${currency}`;
+  chartElement.setAttribute("aria-label", hasData
+    ? `Расходы по месяцам в ${currency}. С ${monthLabel(series.months[0])} по ${monthLabel(series.months.at(-1))}. Точные суммы доступны в таблице ниже.`
+    : message);
+  const tbody = document.getElementById("monthlyTableRows");
+  tbody.innerHTML = "";
+  series.months.forEach((month, index) => {
+    const row = document.createElement("tr");
+    for (const value of [monthLabel(month), formatMoney(series.totals[index], currency)]) {
+      const cell = document.createElement("td");
+      cell.textContent = value;
+      row.appendChild(cell);
+    }
+    tbody.appendChild(row);
+  });
+  if (!hasData) {
+    const cell = document.createElement("td");
+    cell.colSpan = 2;
+    cell.textContent = message;
+    const row = document.createElement("tr");
+    row.appendChild(cell);
+    tbody.appendChild(row);
+  }
+
+  const trace = (name, totals, color, total = false) => ({
+    uid: total ? "monthly-total" : `monthly-category-${Array.from(name, (character) => character.codePointAt(0).toString(16)).join("-")}`,
+    type: "scatter",
+    mode: "lines+markers",
+    name,
+    x: series.months,
+    y: totals,
+    customdata: series.months.map((month, index) => [monthLabel(month), formatMoney(totals[index], currency)]),
+    line: { color, width: total ? 3 : 2, shape: "linear" },
+    marker: { color, size: total ? 8 : 6, symbol: total ? "circle" : "diamond" },
+    visible: total ? true : "legendonly",
+    hovertemplate: "%{customdata[0]}<br>%{customdata[1]}<extra>%{fullData.name}</extra>",
+  });
+  const tickCount = Math.min(series.months.length, compact ? 4 : 12);
+  const tickMonths = Array.from({ length: tickCount }, (_, index) =>
+    series.months[Math.round(index * (series.months.length - 1) / Math.max(1, tickCount - 1))],
+  );
+  Plotly.react("monthlyChart", hasData ? [
+    trace("Все расходы", series.totals, "#2563eb", true),
+    ...series.categories.map((item, index) => trace(item.category, item.totals, categoryColors[(index + 1) % categoryColors.length])),
+  ] : [], {
+    height: compact ? 440 : 520,
+    margin: { l: compact ? 56 : 80, r: compact ? 16 : 30, t: 24, b: 24 },
+    hovermode: "x unified",
+    showlegend: hasData,
+    legend: { orientation: "h", y: -0.22, x: 0, uirevision: "monthly", font: { size: compact ? 11 : 13 } },
+    xaxis: {
+      title: "Месяц",
+      type: "category",
+      categoryorder: "array",
+      categoryarray: series.months,
+      tickmode: "array",
+      tickvals: tickMonths,
+      ticktext: tickMonths.map(monthLabel),
+      tickangle: 0,
+      automargin: true,
+      showgrid: false,
+      visible: hasData,
+    },
+    yaxis: {
+      title: `Расходы, ${currency}`,
+      rangemode: "tozero",
+      gridcolor: "#dfe8f6",
+      zerolinecolor: "#d9e2f1",
+      separatethousands: true,
+      automargin: true,
+      visible: hasData,
+    },
+    annotations: hasData ? [] : [{
+      text: escapeChartText(message), x: 0.5, y: 0.5, xref: "paper", yref: "paper",
+      showarrow: false, font: { size: 16, color: "#66758a" },
+    }],
+    paper_bgcolor: "#ffffff",
+    plot_bgcolor: "#ffffff",
+    hoverlabel: { bgcolor: "#ffffff", bordercolor: "#94a3b8", font: { color: "#111827" } },
+    font: { family: "Avenir Next, Segoe UI, Arial, sans-serif", color: "#111827", size: compact ? 12 : 14 },
+  }, { displayModeBar: false, responsive: true, showTips: false });
 }
 
 function renderCashflowTable(flow, currency) {
@@ -1503,6 +1636,9 @@ function renderDashboard() {
     renderChart(filteredExpenses);
     renderDetails(filteredExpenses);
   }
+  if (dashboardState.activeView === "monthly") {
+    renderMonthlyExpenses(filteredExpenses);
+  }
   if (dashboardState.activeView === "cashflow") {
     renderCashflowSankey(filteredMovements);
     renderCashflowDetails(filteredMovements);
@@ -1590,6 +1726,7 @@ function setActiveView(view) {
   dashboardState.activeView = view;
   const titles = {
     expenses: "Расходы",
+    monthly: "Динамика расходов",
     cashflow: "Доходы и расходы",
     balance: "Баланс",
   };
@@ -1597,13 +1734,15 @@ function setActiveView(view) {
   document.getElementById("expenseFilters").classList.toggle("is-hidden", view === "balance");
   document.getElementById("minCategoryTotalFilter").classList.toggle(
     "is-hidden",
-    view !== "expenses",
+    view !== "expenses" && view !== "monthly",
   );
   document.getElementById("expenseView").classList.toggle("is-hidden", view !== "expenses");
+  document.getElementById("monthlyView").classList.toggle("is-hidden", view !== "monthly");
   document.getElementById("cashflowView").classList.toggle("is-hidden", view !== "cashflow");
   document.getElementById("balanceView").classList.toggle("is-hidden", view !== "balance");
   for (const [buttonId, buttonView] of [
     ["expensesTab", "expenses"],
+    ["monthlyTab", "monthly"],
     ["cashflowTab", "cashflow"],
     ["balanceTab", "balance"],
   ]) {
@@ -1675,6 +1814,7 @@ if (typeof document !== "undefined") {
   document.getElementById("resetFilters").addEventListener("click", resetFilters);
   document.getElementById("resetBalanceFilters").addEventListener("click", resetBalanceFilters);
   document.getElementById("expensesTab").addEventListener("click", () => setActiveView("expenses"));
+  document.getElementById("monthlyTab").addEventListener("click", () => setActiveView("monthly"));
   document.getElementById("cashflowTab").addEventListener("click", () => setActiveView("cashflow"));
   document.getElementById("cashflowIncomeButton").addEventListener("click", () => {
     dashboardState.selectedCashflowIncomeSources = [];
@@ -1702,6 +1842,7 @@ if (typeof module !== "undefined" && module.exports) {
   module.exports = {
     aggregateCashflowSankey,
     aggregateMonthlyCashflow,
+    aggregateMonthlyExpenses,
     buildCashflowSankeyTrace,
     cashflowIncomeTransactions,
     matchesSelectedCategories,

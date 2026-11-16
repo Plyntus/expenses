@@ -17,6 +17,7 @@
           </div>
           <nav class="view-tabs" aria-label="Разделы продукта">
             <button id="expensesTab" class="view-tab is-active" type="button" aria-pressed="true">Расходы</button>
+            <button id="monthlyTab" class="view-tab" type="button" aria-pressed="false">Динамика расходов</button>
             <button id="cashflowTab" class="view-tab" type="button" aria-pressed="false">Доходы и расходы</button>
             <button id="balanceTab" class="view-tab" type="button" aria-pressed="false">Баланс</button>
           </nav>
@@ -83,6 +84,30 @@
               <tbody id="transactionRows"></tbody>
             </table>
           </div>
+        </section>
+      </section>
+
+      <section id="monthlyView" class="view-page is-hidden">
+        <section class="panel chart-panel cashflow-panel" aria-labelledby="monthlyTitle">
+          <header class="cashflow-panel-header">
+            <div>
+              <p class="section-kicker">Помесячная динамика</p>
+              <h2 id="monthlyTitle">Как менялись расходы</h2>
+            </div>
+            <p id="monthlyPeriod" class="cashflow-period">Выбранный период</p>
+          </header>
+          <div id="monthlyChart" class="chart cashflow-chart" role="img" aria-label="Расходы по месяцам"></div>
+          <p class="chart-help">Линия «Все расходы» показывает сумму за месяц. Нажмите на категорию в легенде, чтобы включить её линию. Месяцы без расходов показаны нулём; крайние месяцы учитываются в пределах выбранных дат.</p>
+          <details class="monthly-data">
+            <summary>Помесячные суммы</summary>
+            <div class="table-wrap">
+              <table>
+                <caption class="sr-only">Расходы по месяцам в выбранной валюте</caption>
+                <thead><tr><th scope="col">Месяц</th><th id="monthlyAmountHeader" scope="col">Расходы</th></tr></thead>
+                <tbody id="monthlyTableRows"></tbody>
+              </table>
+            </div>
+          </details>
         </section>
       </section>
 

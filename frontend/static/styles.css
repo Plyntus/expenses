@@ -172,6 +172,7 @@ select:focus-visible,
 a:focus-visible,
 .multi-select-trigger:focus-visible,
 .multi-select-clear:focus-visible,
+.monthly-data summary:focus-visible,
 .balance-accordion summary:focus-visible {
   outline: 2px solid var(--accent-dark);
   outline-offset: 2px;
@@ -546,6 +547,23 @@ button.cashflow-metric-income:focus-visible {
   font-size: 13px;
 }
 
+.monthly-data {
+  margin: 0 22px 18px;
+}
+
+.monthly-data summary {
+  min-height: 44px;
+  display: list-item;
+  padding: 10px 0;
+  color: var(--accent-dark);
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.monthly-data td:last-child {
+  font-variant-numeric: tabular-nums;
+}
+
 .chart .js-plotly-plot,
 .chart .plot-container,
 .chart .svg-container {
@@ -831,6 +849,10 @@ th {
 
   .chart-help {
     padding: 0 14px 16px;
+  }
+
+  .monthly-data {
+    margin: 0 14px 16px;
   }
 
   .summary-row {

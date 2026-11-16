@@ -209,6 +209,13 @@ Click the income total or an income source in the Sankey diagram to show its
 transactions below the chart. The table follows the active filters and lists
 income operations newest first, with their original amounts and currencies.
 
+The `Динамика расходов` tab shows a monthly expense line chart using all filters
+from the main expense view. The total is visible by default; category lines can
+be enabled in the legend. The minimum category amount groups smaller categories
+into `Другое` across the selected period. Months without expenses show zero, and
+the first and last months include only transactions within the selected dates.
+Exact monthly totals are also available in the expandable table below the chart.
+
 Before sending the report, the bot syncs Google Sheets to Postgres and then calculates totals from the synced `expenses` table. The `Остальное` budget category receives every expense category that is not listed explicitly in the budget sheet, with amounts converted to the budget currency.
 
 Categories excluded from Telegram reports are configured directly in
